@@ -1,0 +1,89 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+body {
+  font-family: 'Outfit', 'Inter', sans-serif;
+  background-color: #f7f6f2;
+}
+
+/* Beautiful rural crop fields background with a warm organic golden wheat feel */
+.chat-gradient {
+  background-color: #fcfaf2;  /* Warm golden wheat seed cream */
+  background-image: 
+    radial-gradient(#d3cbb5 0.75px, transparent 0.75px), 
+    radial-gradient(#d3cbb5 0.75px, #fcfaf2 0.75px);
+  background-size: 28px 28px;
+  background-position: 0 0, 14px 14px;
+}
+
+/* Luxury deep spruce forest green sidebar background */
+.sidebar-blur {
+  background-color: #02170f; /* Even deeper, wealthier forest green */
+}
+
+.bg-leaf {
+  background-color: #053b26;
+}
+
+.result-card {
+  border-left: 6px solid #d97706; /* Golden Amber harvest mark */
+  box-shadow: 0 6px 30px -4px rgba(5, 59, 38, 0.12);
+  background: linear-gradient(180deg, #ffffff 0%, #fffbf2 100%);
+  border-radius: 16px;
+}
+
+/* Custom logo glow-pulse breathing animation with a high-end luxury gold-tricolor ring */
+@keyframes glowPulse {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(217, 119, 6, 0.5), 0 0 5px rgba(16, 185, 129, 0.3);
+    border-color: rgba(251, 191, 36, 0.8);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(217, 119, 6, 0.82), 0 0 15px rgba(16, 185, 129, 0.6);
+    border-color: rgba(245, 158, 11, 1);
+    transform: scale(1.05);
+  }
+}
+
+.logo-glow {
+  animation: glowPulse 3.5s infinite ease-in-out;
+  background: linear-gradient(135deg, #053b26 0%, #0d5c3a 50%, #d97706 100%);
+}
+
+/* Shimmer animation for new/important features */
+@keyframes subtleShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.premium-shimmer {
+  background: linear-gradient(90deg, #d97706 0%, #fbbf24 50%, #d97706 100%);
+  background-size: 200% 100%;
+  animation: subtleShimmer 4s infinite linear;
+}
+
+/* Scrollbar styling */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(13, 67, 49, 0.15);
+  border-radius: 99px;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.2);
+  border-radius: 99px;
+}

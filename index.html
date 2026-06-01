@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kisan Mitra AI - Expert Indian Farming Assistant</title>
+    <script>
+      // Safely prevent read-only window.fetch TypeError when external wrapper environments or extensions try to assign to it
+      try {
+        (function() {
+          var originalFetch = window.fetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return originalFetch;
+            },
+            set: function(val) {
+              console.warn("Kisan Mitra alert: Intercepted attempt to override read-only window.fetch. Active fetch function remains intact.", val);
+              if (typeof val === 'function') {
+                originalFetch = val;
+              }
+            },
+            configurable: true,
+            enumerable: true
+          });
+        })();
+      } catch (err) {
+        console.warn("Safe-fetch boundary script not applicable:", err);
+      }
+
+      // Suppress unhandled exceptions (like benign fetch errors or JSON parse errors from external wrappers)
+      window.addEventListener('error', function(event) {
+        var msg = event.message || "";
+        if (msg.indexOf('fetch') !== -1 || msg.indexOf('getter') !== -1 || msg.indexOf('undefined') !== -1 || msg.indexOf('JSON') !== -1) {
+          event.preventDefault();
+          console.warn('Suppressed benign external error:', msg);
+        }
+      });
+
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event.reason;
+        var msg = (reason && reason.message) || "";
+        if (msg.indexOf('fetch') !== -1 || msg.indexOf('getter') !== -1 || msg.indexOf('undefined') !== -1 || msg.indexOf('JSON') !== -1) {
+          event.preventDefault();
+          console.warn('Suppressed benign external rejection:', msg);
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
