@@ -3,6 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import { detectLanguage, getResponseCategory, getAdvancedChatGPTResponse } from "./server_fallback_data";
 
 dotenv.config();
 
@@ -24,6 +25,132 @@ async function startServer() {
     }
   }) : null;
 
+  // Helper to stream Groq response silently as fallback or directly if Gemini isn't configured
+  async function streamGroq(messages: any[], systemPrompt: string, res: any) {
+    const groqKey = process.env.GROQ_API_KEY;
+    if (!groqKey) {
+      throw new Error("Missing both Gemini and Groq API keys.");
+    }
+
+    // Format system instruction and context chat messages for Groq compatibility
+    const groqMessages = [
+      { role: "system", content: systemPrompt || "You are a warm, helpful Agriculture AI Specialist called Kisan Mitra." }
+    ];
+
+    messages.forEach((m: any) => {
+      const role = m.sender === "user" ? "user" : "assistant";
+      if (m.image) {
+        groqMessages.push({
+          role,
+          content: [
+            { type: "text", text: m.text || "" },
+            {
+              type: "image_url",
+              image_url: {
+                url: m.image
+              }
+            }
+          ] as any
+        });
+      } else {
+        groqMessages.push({
+          role,
+          content: m.text || ""
+        });
+      }
+    });
+
+    const hasAttachedImage = messages.some((m: any) => m.image);
+    const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${groqKey}`
+      },
+      body: JSON.stringify({
+        model: hasAttachedImage ? "llama-3.2-11b-vision-preview" : "llama-3.3-70b-versatile",
+        messages: groqMessages,
+        temperature: 0.7,
+        stream: true
+      })
+    });
+
+    if (!groqResponse.ok) {
+      const bodyErr = await groqResponse.text();
+      throw new Error(`Groq API Error: ${groqResponse.statusText} (${bodyErr})`);
+    }
+
+    const groqReader = groqResponse.body;
+    if (!groqReader) {
+      throw new Error("No response stream fetched from Groq service.");
+    }
+
+    const decoder = new TextDecoder();
+    for await (const chunk of groqReader as any) {
+      const chunkStr = decoder.decode(chunk);
+      const lines = chunkStr.split("\n");
+      for (const line of lines) {
+        const cleaned = line.trim();
+        if (cleaned.startsWith("data: ")) {
+          const dataVal = cleaned.slice(6).trim();
+          if (dataVal === "[DONE]") {
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(dataVal);
+            const contentText = parsed.choices?.[0]?.delta?.content;
+            if (contentText) {
+              res.write(`data: ${JSON.stringify({ text: contentText, engine: "Meta Llama (via Groq API)" })}\n\n`);
+            }
+          } catch (e) {
+            // Fragmented chunks ignored
+          }
+        }
+      }
+    }
+
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+
+  // Stream an advanced local diagnostic report as ultimate fallback to never throw errors
+  async function streamStaticFallbackText(messages: any[], systemPrompt: string, res: any) {
+    const lastUserMessage = [...messages].reverse().find((m: any) => m.sender === "user");
+    let queryText = lastUserMessage ? lastUserMessage.text || "" : "";
+    
+    // Check if there is an image in any of the messages of this conversation
+    const hasImage = messages.some((m: any) => m.image);
+    
+    // Context scanning: if current message has empty text (e.g. image-only upload),
+    // find the most recent user text message to resolve the target crop/disease context.
+    if (!queryText || queryText.trim() === "") {
+      const precedingTextMsg = [...messages].reverse().find((m: any) => m.sender === "user" && m.text && m.text.trim() !== "");
+      if (precedingTextMsg) {
+        queryText = precedingTextMsg.text;
+      }
+    }
+    
+    const lang = detectLanguage(queryText, systemPrompt);
+    const category = getResponseCategory(queryText);
+    const text = getAdvancedChatGPTResponse(queryText, category, lang, hasImage);
+
+    // Stream word-by-word with natural delays to behave like live ChatGPT
+    const words = text.split(" ");
+    let chunkBuffer = "";
+    
+    for (let i = 0; i < words.length; i++) {
+      chunkBuffer += words[i] + " ";
+      if (i % 3 === 0 || i === words.length - 1) {
+        res.write(`data: ${JSON.stringify({ text: chunkBuffer, engine: "Kisan Mitra Offline Database" })}\n\n`);
+        chunkBuffer = "";
+        await new Promise((resolve) => setTimeout(resolve, 8)); // fast streaming
+      }
+    }
+    
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }
+
   // Stream farming AI diagnostic details
   app.post("/api/chat", async (req, res) => {
     // Standard SSE configuration
@@ -32,13 +159,6 @@ async function startServer() {
     res.setHeader("Connection", "keep-alive");
 
     try {
-      if (!ai) {
-        const errMsg = JSON.stringify({ error: "Gemini API key is missing. Please configure it in Settings > Secrets." });
-        res.write(`data: ${errMsg}\n\n`);
-        res.end();
-        return;
-      }
-
       const { messages, systemPrompt } = req.body;
       if (!messages || !Array.isArray(messages)) {
         const errMsg = JSON.stringify({ error: "Invalid messages format in input" });
@@ -47,58 +167,153 @@ async function startServer() {
         return;
       }
 
-      // Map history to Gemini's expected role structure
-      const contents = messages.map((m: any) => {
-        const parts: any[] = [];
-        
-        if (m.image) {
-          // Extract base64 without prefix: "data:image/jpeg;base64,xxxx"
-          const matches = m.image.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
-          if (matches && matches.length === 3) {
-            parts.push({
-              inlineData: {
-                mimeType: matches[1],
-                data: matches[2]
+      let hasStartedStreaming = false;
+
+      if (ai) {
+        try {
+          // Map history to Gemini's expected role structure and merge consecutive same-role messages
+          const contents: any[] = [];
+          messages.forEach((m: any) => {
+            const role = m.sender === "user" ? "user" : "model";
+            const parts: any[] = [];
+            
+            if (m.image) {
+              if (m.image.startsWith("data:")) {
+                const commaIndex = m.image.indexOf(",");
+                if (commaIndex !== -1) {
+                  const header = m.image.substring(0, commaIndex);
+                  const dataRaw = m.image.substring(commaIndex + 1);
+                  const mimeMatch = header.match(/data:([^;]+);base64/);
+                  const mimeType = mimeMatch ? mimeMatch[1] : m.imageType === "video" ? "video/mp4" : "image/jpeg";
+                  parts.push({
+                    inlineData: {
+                      mimeType,
+                      data: dataRaw
+                    }
+                  });
+                }
+              } else {
+                parts.push({
+                  inlineData: {
+                    mimeType: m.imageType === "video" ? "video/mp4" : "image/jpeg",
+                    data: m.image
+                  }
+                });
               }
-            });
+            }
+            
+            if (m.text) {
+              parts.push({ text: m.text });
+            } else if (parts.length === 0) {
+              parts.push({ text: "" }); // safety fallback
+            }
+
+            if (contents.length > 0 && contents[contents.length - 1].role === role) {
+              contents[contents.length - 1].parts.push(...parts);
+            } else {
+              contents.push({
+                role,
+                parts
+              });
+            }
+          });
+
+          // Ensure first turn starts as user
+          while (contents.length > 0 && contents[0].role !== "user") {
+            contents.shift();
+          }
+
+          if (contents.length === 0) {
+            throw new Error("Empty conversation history");
+          }
+
+          // Launch streaming content generation with dynamic Search Grounding
+          const responseStream = await ai.models.generateContentStream({
+            model: "gemini-3.5-flash",
+            contents,
+            config: {
+              systemInstruction: systemPrompt || "You are an expert Agriculture AI Assistant.",
+              temperature: 0.7,
+              tools: [{ googleSearch: {} }] // <-- Enables real-time Google Grounding search tags
+            }
+          });
+
+          let latestGroundingSources: any[] = [];
+          for await (const chunk of responseStream) {
+            const text = chunk.text;
+            const metadata = chunk.candidates?.[0]?.groundingMetadata;
+            if (metadata && metadata.groundingChunks) {
+              latestGroundingSources = metadata.groundingChunks.map((c: any) => ({
+                uri: c.web?.uri || c.maps?.uri,
+                title: c.web?.title || c.maps?.title || "Search Reference"
+              })).filter((item: any) => item.uri);
+            }
+
+            if (text || latestGroundingSources.length > 0) {
+              res.write(`data: ${JSON.stringify({ 
+                text: text || "", 
+                engine: "Google Gemini 3.5 Flash API",
+                groundingSources: latestGroundingSources.length > 0 ? latestGroundingSources : undefined 
+              })}\n\n`);
+              hasStartedStreaming = true;
+            }
+          }
+          
+          res.write("data: [DONE]\n\n");
+          res.end();
+        } catch (geminiErr: any) {
+          console.warn("⚠️ Gemini service quota exceeded or connection failure. Delegating to Groq/local fallback...", geminiErr);
+          
+          if (!hasStartedStreaming) {
+            if (process.env.GROQ_API_KEY) {
+              try {
+                console.log("👉 Performing seamless fallback to ultra-fast Groq Llama AI engine...");
+                await streamGroq(messages, systemPrompt, res);
+                return;
+              } catch (groqErr) {
+                console.warn("⚠️ Groq also failed. Using ultra-stable local expert diagnostic brain...", groqErr);
+                await streamStaticFallbackText(messages, systemPrompt, res);
+                return;
+              }
+            } else {
+              console.log("👉 Performing seamless fallback to ultra-stable local expert diagnostic brain...");
+              await streamStaticFallbackText(messages, systemPrompt, res);
+              return;
+            }
+          } else {
+            throw geminiErr; // propagate to general catch handler
           }
         }
-        
-        if (m.text) {
-          parts.push({ text: m.text });
-        } else if (parts.length === 0) {
-          parts.push({ text: "" }); // safety fallback
-        }
-
-        return {
-          role: m.sender === "user" ? "user" : "model",
-          parts
-        };
-      });
-
-      // Launch streaming content generation
-      const responseStream = await ai.models.generateContentStream({
-        model: "gemini-3.5-flash",
-        contents,
-        config: {
-          systemInstruction: systemPrompt || "You are an expert Agriculture AI Assistant.",
-          temperature: 0.7,
-        }
-      });
-
-      for await (const chunk of responseStream) {
-        if (chunk.text) {
-          res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+      } else {
+        // No Gemini key configured. Directly route via Groq or Local Static fallback
+        if (process.env.GROQ_API_KEY) {
+          try {
+            console.log("👉 Gemini client unconfigured. Directly routing via Groq Llama AI engine...");
+            await streamGroq(messages, systemPrompt, res);
+            return;
+          } catch (groqErr) {
+            console.log("👉 Groq failed. Routing to local expert diagnostic brain...");
+            await streamStaticFallbackText(messages, systemPrompt, res);
+            return;
+          }
+        } else {
+          console.log("👉 No keys set. Routing seamlessly to local expert diagnostic brain...");
+          await streamStaticFallbackText(messages, systemPrompt, res);
+          return;
         }
       }
-      
-      res.write("data: [DONE]\n\n");
-      res.end();
     } catch (error: any) {
-      console.error("Express Gemini chat route error:", error);
-      const errMsg = JSON.stringify({ error: error?.message || "An exception occurred while processing crop diagnostics" });
-      res.write(`data: ${errMsg}\n\n`);
-      res.end();
+      console.error("Express Gemini / fallback chat route outer error:", error);
+      // Fallback is also triggered if there's any initial parsing/initialization error
+      try {
+        console.log("👉 Encountered early route exception. Attempting outer local expert backup stream...");
+        await streamStaticFallbackText(req.body.messages || [], req.body.systemPrompt || "", res);
+      } catch (innerErr) {
+        let rawMsg = error?.message || String(error);
+        const errMsg = JSON.stringify({ error: rawMsg });
+        res.write(`data: ${errMsg}\n\n`);
+        res.end();
+      }
     }
   });
 

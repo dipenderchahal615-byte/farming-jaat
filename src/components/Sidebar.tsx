@@ -63,47 +63,47 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* Language Selector Segment */}
-      <div className="px-4 py-3 border-b border-emerald-900/20 bg-emerald-950/20">
-        <div className="flex items-center gap-1.5 justify-between">
-          <span className="text-[10px] text-emerald-400 capitalize font-bold flex items-center gap-1 font-mono tracking-wide">
-            <Globe2 className="w-3.5 h-3.5" />
-            {t.language}
-          </span>
-          <div className="flex bg-emerald-950 rounded-lg p-0.5 border border-[#0d4f35]/80 shadow-inner">
-            <button
-              onClick={() => setLanguage('en')}
-              className={`text-[10px] font-semibold px-2.5 py-1 rounded transition-all cursor-pointer ${
-                language === 'en'
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-md font-bold'
-                  : 'text-emerald-300 hover:text-white'
-              }`}
-            >
-              EN
-            </button>
-            <button
-              onClick={() => setLanguage('hi')}
-              className={`text-[10px] font-semibold px-2.5 py-1 rounded transition-all cursor-pointer ${
-                language === 'hi'
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-md font-bold'
-                  : 'text-emerald-300 hover:text-white'
-              }`}
-            >
-              हिंदी
-            </button>
-            <button
-              onClick={() => setLanguage('pa')}
-              className={`text-[10px] font-semibold px-2.5 py-1 rounded transition-all cursor-pointer ${
-                language === 'pa'
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-md font-bold'
-                  : 'text-emerald-300 hover:text-white'
-              }`}
-            >
-              ਪੰਜਾਬੀ
-            </button>
-          </div>
+      {/* Dynamic Native Segmented Language Selector */}
+      <div className="px-4 py-2 bg-emerald-950/60 border-b border-emerald-900/30">
+        <label className="text-[10px] text-amber-400/80 font-bold uppercase tracking-wider font-mono flex items-center gap-1 mb-1.5">
+          <Globe2 className="w-3.5 h-3.5 text-amber-500" />
+          {t.language}
+        </label>
+        <div className="grid grid-cols-3 gap-1.5 p-1 bg-black/40 rounded-xl border border-emerald-950/50">
+          <button
+            onClick={() => setLanguage('hi')}
+            className={`py-1.5 px-2 text-[11px] font-bold transition-all rounded-lg cursor-pointer ${
+              language === 'hi'
+                ? 'bg-amber-500 text-emerald-950 shadow-md border border-amber-300'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/45'
+            }`}
+          >
+            हिन्दी
+          </button>
+          <button
+            onClick={() => setLanguage('pa')}
+            className={`py-1.5 px-2 text-[11px] font-bold transition-all rounded-lg cursor-pointer ${
+              language === 'pa'
+                ? 'bg-amber-500 text-emerald-950 shadow-md border border-amber-300'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/45'
+            }`}
+          >
+            ਪੰਜਾਬੀ
+          </button>
+          <button
+            onClick={() => setLanguage('en')}
+            className={`py-1.5 px-2 text-[11px] font-bold transition-all rounded-lg cursor-pointer ${
+              language === 'en'
+                ? 'bg-amber-500 text-emerald-950 shadow-md border border-amber-300'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/45'
+            }`}
+          >
+            English
+          </button>
         </div>
       </div>
+
+
 
       {/* Primary Actions */}
       <div className="p-4 space-y-2">

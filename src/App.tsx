@@ -5,11 +5,18 @@ import ChatArea from './components/ChatArea';
 import { Sprout, Menu, X, HelpCircle, Check, Play } from 'lucide-react';
 
 // Extremely robust, fail-safe JSON parser to prevent any possible "Uncaught SyntaxError" crashes in the app
-const safeJsonParse = <T,>(str: string | null, fallback: T): T => {
-  if (!str) return fallback;
+const safeJsonParse = <T,>(str: any, fallback: T): T => {
+  if (str === null || str === undefined) return fallback;
   try {
-    const trimmed = str.trim();
-    if (trimmed === "" || trimmed === "undefined" || trimmed === "null" || trimmed === "NaN") {
+    const rawStr = typeof str === 'string' ? str : String(str);
+    const trimmed = rawStr.trim();
+    if (
+      trimmed === "" || 
+      trimmed === "undefined" || 
+      trimmed === "null" || 
+      trimmed === "NaN" || 
+      trimmed === "[object Object]"
+    ) {
       return fallback;
     }
     // Double check that it looks like a JSON array or object before parsing
@@ -119,7 +126,7 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = async (text: string, image?: string) => {
+  const handleSendMessage = async (text: string, image?: string, imageType?: 'image' | 'video') => {
     // If no session exists, bootstrap one immediately
     let currentSessionId = activeSessionId;
     let currentSessions = [...sessions];
@@ -147,6 +154,7 @@ export default function App() {
       sender: 'user',
       text,
       image,
+      imageType,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -171,9 +179,78 @@ export default function App() {
     saveSessions(updatedSessions);
     setIsStreaming(true);
 
+    const hasAttachedImage = !!image || updatedMessages.some(m => m.image);
+
     try {
-      // Build golden-embellished Kisan Mitra dynamic system prompt
-      const systemPrompt = `You are "Kisan Mitra" (किसान मित्र / ਕਿਸਾਨ ਮਿੱਤਰ), an extremely warm, polite, and highly expert Indian agricultural specialist and friendly crop doctor.
+      let systemPrompt = "";
+      if (hasAttachedImage) {
+        if (language === 'hi') {
+          systemPrompt = `आप 'किसान मित्र' (Kisan Mitra) हैं - एक विशेषज्ञ कृषि सलाहकार और फसल डॉक्टर।
+चूंकि किसान भाई ने अपने पौधे या पत्ते की फोटो भेजी है, आपको उनका जवाब बेहद सीधा, सरल और बिना किसी फालतू गपशप/जटिलता के देना है।
+
+आपके उत्तर में केवल निम्नलिखित 3 चीजें होनी चाहिए:
+1. **पेड़ या पौधे का नाम**: (पहचाने गए पेड़ या पौधे का नाम लिखें)
+2. **बीमारी या समस्या**: (पत्ते या पौधे में देखी गई बीमारी या समस्या का नाम)
+3. **उसका पक्का इलाज**: (आवश्यक रसायनिक दवा या घरेलू जैविक उपाय और छिड़काव की मात्रा/विधि)
+
+कृपया कोई भी अन्य अतिरिक्त पैराग्राफ, परिचय, या जटिल बातें मत लिखें। किसान को बिल्कुल सीधा और सरल उत्तर पसंद है।
+
+उत्तर के अंत में आपको यह सटीक डायग्नोसिस ब्लॉक भी दिखाना होगा, ताकि सिस्टम कार्ड बना सके:
+[DIAGNOSIS_START]
+Crop: <फसल/पेड़ का अंग्रेजी नाम, जैसे Tomato या Wheat>
+Issue: <बीमारी का अंग्रेजी नाम, जैसे Leaves Blight या Leaf Rust>
+Severity: <High / Medium / Low>
+Chemical_Remedy: <दवा का नाम और मात्रा>
+Organic_Remedy: <जैविक घरेलू इलाज>
+Reason: <बीमारी का कारण>
+Prevention: <आगे के लिए बचाव>
+[DIAGNOSIS_END]`;
+        } else if (language === 'pa') {
+          systemPrompt = `ਤੁਸੀਂ 'ਕਿਸਾਨ ਮਿੱਤਰ' (Kisan Mitra) ਹੋ - ਇੱਕ ਖੇਤੀਬਾੜੀ ਮਾਹਰ ਅਤੇ ਫਸਲ ਡਾਕਟਰ।
+ਕਿਉਂਕਿ ਕਿਸਾਨ ਵੀਰ ਨੇ ਪੌਦੇ/ਪੱਤੇ ਦੀ ਫੋਟੋ ਭੇਜੀ ਹੈ, ਤੁਹਾਨੂੰ ਉਹਨਾਂ ਦਾ ਜਵਾਬ ਬਹੁਤ ਸਿੱਧਾ, ਸਰਲ ਅਤੇ ਬਿਨਾਂ ਕਿਸੇ ਫਾਲਤੂ ਗੱਲਬਾਤ ਦੇ ਦੇਣਾ ਚਾਹੀਦਾ ਹੈ।
+
+ਤੁਹਾਡੇ ਜਵਾਬ ਵਿੱਚ ਸਿਰਫ਼ ਹੇਠ ਲਿਖੀਆਂ 3 ਚੀਜ਼ਾਂ ਹੋਣੀਆਂ ਚਾਹੀਦੀਆਂ ਹਨ:
+1. **ਪੌਦੇ ਜਾਂ ਰੁੱਖ ਦਾ ਨਾਮ**: (ਪਛਾਣੇ ਗਏ ਪੌਦੇ/ਰੁੱਖ ਦਾ ਨਾਮ ਲਿਖੋ)
+2. **ਬੀਮਾਰੀ ਜਾਂ ਸਮੱਸਿਆ**: (ਪੱਤੇ ਜਾਂ ਪੌਦੇ ਵਿੱਚ ਦੇਖੀ ਗਈ ਬੀਮਾਰੀ/ਸਮੱਸਿਆ ਦਾ ਨਾਮ)
+3. **ਉਸਦਾ ਪੱਕਾ ਇਲਾਜ**: (ਲੋੜੀਂਦੀ ਦਵਾਈ ਜਾਂ ਦੇਸੀ ਉਪਾਅ ਅਤੇ ਛਿੜਕਾਅ ਦਾ ਤਰੀਕਾ)
+
+ਕਿਰਪਾ ਕਰਕੇ ਕੋਈ ਹੋਰ ਵਾਧੂ ਪੈਰਾਗ੍ਰਾਫ, ਜਾਣ-ਪਛਾਣ, ਜਾਂ ਗੁੰਝਲਦਾਰ ਗੱਲਾਂ ਨਾ ਲਿਖੋ। ਕਿਸਾਨ ਨੂੰ ਬਿਲਕੁਲ ਸਿੱਧਾ ਅਤੇ ਸਰਲ ਜਵਾਬ ਪਸੰਦ ਹੈ।
+
+ਜਵਾਬ ਦੇ ਅੰਤ ਵਿੱਚ ਤੁਹਾਨੂੰ ਇਹ ਸਹੀ ਡਾਇਗਨੋਸਿਸ ਬਲਾਕ ਵੀ ਦਿਖਾਉਣਾ ਹੋਵੇਗਾ, ਤਾਂ ਜੋ ਸਿਸਟਮ ਕਾਰਡ ਬਣਾ ਸਕੇ:
+[DIAGNOSIS_START]
+Crop: <ਫਸਲ/ਰੁੱਖ ਦਾ ਅੰਗਰੇਜ਼ੀ ਨਾਮ, ਜਿਵੇਂ Tomato ਜੀ Wheat>
+Issue: <ਬੀਮਾਰੀ ਦਾ ਅੰਗਰੇਜ਼ੀ ਨਾਮ, ਜਿਵੇਂ Leaves Blight ਜੀ Leaf Rust>
+Severity: <High / Medium / Low>
+Chemical_Remedy: <ਦਵਾਈ ਦਾ ਨਾਮ ਅਤੇ ਮਾਤਰਾ>
+Organic_Remedy: <ਦੇਸੀ ਘਰੇਲੂ ਇਲਾਜ>
+Reason: <ਬੀਮਾਰੀ ਦਾ ਕਾਰਨ>
+Prevention: <ਅੱਗੇ ਲਈ ਬਚਾਅ>
+[DIAGNOSIS_END]`;
+        } else {
+          systemPrompt = `You are 'Kisan Mitra' (Kisan Mitra) - an expert Agriculture advisor and crop doctor.
+Since the farmer has shared a photo of a crop/plant, your response must be extremely direct, simple, and free of any conversational fluff.
+
+Your response must contain ONLY these 3 direct elements:
+1. **Plant/Tree Name**: (Identified plant or tree name)
+2. **Disease or Problem**: (The identified disease, pest, or nutrient issue)
+3. **Cure / Treatment**: (Exact recommended medicine, spray instructions or organic solution)
+
+Do not write any other paragraphs, long intros or complicated systems. Keep it clean and straight to the point.
+
+At the very end of your response, you MUST print this raw block started with [DIAGNOSIS_START] and ended with [DIAGNOSIS_END] so the system card can display properly:
+[DIAGNOSIS_START]
+Crop: <Name of crop in standard English, e.g., Wheat / Tomato>
+Issue: <Identified problem in English, e.g., Early Blight / Aphids>
+Severity: <High / Medium / Low>
+Chemical_Remedy: <Specific ingredient + brand dose>
+Organic_Remedy: <Organic alternative>
+Reason: <Primary biological trigger>
+Prevention: <Prevention practice>
+[DIAGNOSIS_END]`;
+        }
+      } else {
+        systemPrompt = `You are "Kisan Mitra" (किसान मित्र / ਕਿਸਾਨ ਮਿੱਤਰ), an extremely warm, polite, and highly expert Indian agricultural specialist and friendly crop doctor.
+Today's Date: ${new Date().toDateString()}, Current local time: ${new Date().toLocaleTimeString()} (India Timezone).
 
 Communication Vibe (CRITICAL):
 1. ALWAYS communicate in friendly, warm, respectful Hinglish (Hindi + English mix), pure Hindi, or pure Punjabi matching the user's selected interface language.
@@ -194,7 +271,7 @@ Response Blueprint (Structure every answer beautifully):
 
 Domain Specialties:
 - Diagnosing plant foliage/leaf/stem diseases, suggesting top pesticides, calculating DAP/Urea quantities, dairy farming/poultry cattle feed, PM-Kisan scheme applications, Mandi rates, organic methods.
-- Rejection Rule: For general generic queries not related to crops, seeds, machines, soil, animal husbandry, pashupalan or farming, refuse with an affectionate smile: "Arey bhai, main toh simple Kisan Mitra hoon. Main kheti-baadi ya pashupalan ke sawaal hi samajhta hoon! Kheti ka kuch bhi poocho, aapka bhai turant bataega!"
+- Rejection Rule: For general generic queries not related to crops, seeds, machines, soil, animal husbandry, pashupalan or farming, refuse with an affectionate smile: "Arey bhai, main toh simple Kisan Mitra hoon. Main kheti-baadi ya pashupalan ke sawaल ही समझता हूँ! Kheti ka kuch bhi poocho, aapka bhai turant bataega!"
 
 Crucial Diagnostic Block Instruction:
 At the very end of every Leaf analysis, pest attack, crop disease, or plant deficiency solution, you MUST print this raw block EXACTLY starts with [DIAGNOSIS_START] and ends with [DIAGNOSIS_END]. Do not translate uppercase labels:
@@ -207,6 +284,7 @@ Organic_Remedy: <Zero-cost traditional organic recipe, e.g., Spray neem seed ker
 Reason: <Primary biological trigger, e.g., Excess moisture during cloudy days or hot dry wind>
 Prevention: <Actionable field practice, e.g., Use certified pest-free seed and avoid water logging>
 [DIAGNOSIS_END]`;
+      }
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -251,6 +329,8 @@ Prevention: <Actionable field practice, e.g., Use certified pest-free seed and a
       let done = false;
       let buffer = "";
       let accumulatedText = "";
+      let latestGroundingSources: { uri: string; title: string }[] | undefined = undefined;
+      let latestEngineName = "";
 
       while (!done) {
         const { value, done: doneReading } = await reader.read();
@@ -271,7 +351,7 @@ Prevention: <Actionable field practice, e.g., Use certified pest-free seed and a
                   break;
                 }
                 try {
-                  const parsed = safeJsonParse<{ error?: string; text?: string } | null>(dataStr, null);
+                  const parsed = safeJsonParse<{ error?: string; text?: string; engine?: string; groundingSources?: { uri: string; title: string }[] } | null>(dataStr, null);
                   if (parsed) {
                     if (parsed.error) {
                       accumulatedText = parsed.error;
@@ -280,25 +360,36 @@ Prevention: <Actionable field practice, e.g., Use certified pest-free seed and a
                     }
                     if (parsed.text) {
                       accumulatedText += parsed.text;
-                      
-                      // Live update active session rendering
-                      setSessions(prevSessions => {
-                        return prevSessions.map(s => {
-                          if (s.id === currentSessionId) {
-                            return {
-                              ...s,
-                              messages: s.messages.map(m => {
-                                if (m.id === botMessageId) {
-                                  return { ...m, text: accumulatedText };
-                                }
-                                return m;
-                               })
-                            };
-                          }
-                          return s;
-                        });
-                      });
                     }
+                    if (parsed.engine) {
+                      latestEngineName = parsed.engine;
+                    }
+                    if (parsed.groundingSources && parsed.groundingSources.length > 0) {
+                      latestGroundingSources = parsed.groundingSources;
+                    }
+                    
+                    // Live update active session rendering
+                    setSessions(prevSessions => {
+                      return prevSessions.map(s => {
+                        if (s.id === currentSessionId) {
+                          return {
+                            ...s,
+                            messages: s.messages.map(m => {
+                              if (m.id === botMessageId) {
+                                return { 
+                                  ...m, 
+                                  text: accumulatedText,
+                                  groundingSources: latestGroundingSources || m.groundingSources,
+                                  engine: latestEngineName || m.engine
+                                };
+                              }
+                              return m;
+                              })
+                          };
+                        }
+                        return s;
+                      });
+                    });
                   }
                 } catch (e) {
                   // Ignore parse fails on fragmented chunks
@@ -317,7 +408,12 @@ Prevention: <Actionable field practice, e.g., Use certified pest-free seed and a
               ...s,
               messages: s.messages.map(m => {
                 if (m.id === botMessageId) {
-                  return { ...m, text: accumulatedText };
+                  return { 
+                    ...m, 
+                    text: accumulatedText,
+                    groundingSources: latestGroundingSources || m.groundingSources,
+                    engine: latestEngineName || m.engine
+                  };
                 }
                 return m;
               })
@@ -450,9 +546,8 @@ Prevention: <Actionable field practice, e.g., Use certified pest-free seed and a
             🌾 {TRANSLATIONS[language].appName}
           </span>
 
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-[10px] uppercase">
-            {language}
-          </div>
+          {/* Removed upper right language badge for a cleaner, unified farmer layout */}
+          <div className="w-8"></div>
         </div>
 
         {/* Main Conversation viewport component */}

@@ -9,7 +9,7 @@ interface ChatAreaProps {
   language: Language;
   messages: ChatMessage[];
   isStreaming: boolean;
-  onSendMessage: (text: string, image?: string) => void;
+  onSendMessage: (text: string, image?: string, imageType?: 'image' | 'video') => void;
   onClearChat: () => void;
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
@@ -68,6 +68,7 @@ export default function ChatArea({
 }: ChatAreaProps) {
   const [inputText, setInputText] = useState('');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedMediaType, setSelectedMediaType] = useState<'image' | 'video' | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [currentlySpeakingId, setCurrentlySpeakingId] = useState<string | null>(null);
   
@@ -137,9 +138,11 @@ export default function ChatArea({
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      const isVideo = file.type.startsWith('video/');
       const reader = new FileReader();
       reader.onloadend = () => {
         setSelectedImage(reader.result as string);
+        setSelectedMediaType(isVideo ? 'video' : 'image');
       };
       reader.readAsDataURL(file);
     }
@@ -147,15 +150,17 @@ export default function ChatArea({
 
   const clearImage = () => {
     setSelectedImage(null);
+    setSelectedMediaType(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSend = () => {
     if (!inputText.trim() && !selectedImage) return;
 
-    onSendMessage(inputText, selectedImage || undefined);
+    onSendMessage(inputText, selectedImage || undefined, selectedMediaType || undefined);
     setInputText('');
     setSelectedImage(null);
+    setSelectedMediaType(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -328,16 +333,6 @@ export default function ChatArea({
       {/* Top Bar Navigation Info */}
       <header className="h-16 px-5 flex items-center justify-between border-b border-emerald-100 bg-emerald-50/45 backdrop-blur-md shadow-xs">
         <div className="flex items-center gap-3">
-          {/* Desktop Auto-Adjust Collapsible Trigger - Solves independence and alignment */}
-          <button
-            onClick={onToggleSidebar}
-            className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-emerald-50 text-emerald-800 hover:text-emerald-950 font-bold text-xs rounded-xl border border-emerald-200/50 transition-all cursor-pointer shadow-sm"
-            title={isSidebarCollapsed ? "Show Sidebar Menu" : "Hide Sidebar Menu (Full Screen Mode)"}
-          >
-            <span className="text-sm">🌾</span>
-            <span>{isSidebarCollapsed ? (language === 'hi' ? 'साइडबार देखें' : language === 'pa' ? 'ਸਾਈਡਬਾਰ ਦੇਖੋ' : 'Show Menu') : (language === 'hi' ? 'पूरा स्क्रीन' : language === 'pa' ? 'ਪੂਰਾ ਸਕਰੀਨ' : 'Full Screen')}</span>
-          </button>
-
           <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse hidden lg:block"></span>
           <span className="text-xs sm:text-[14px] font-bold font-sans text-emerald-950 flex items-center gap-1.5">
             👨‍🌾 {language === 'hi' ? 'किसान मित्र (Kisan Mitra)' : language === 'pa' ? 'ਕਿਸਾਨ ਮਿੱਤਰ (Kisan Mitra)' : 'Kisan Mitra AI'}
@@ -460,20 +455,60 @@ export default function ChatArea({
                       : 'bg-white border border-emerald-100 text-gray-800 rounded-tl-none whitespace-pre-wrap font-sans'
                   }`}
                 >
-                  {/* Photo Display if attached */}
+                  {/* Photo/Video Display if attached */}
                   {msg.image && (
-                    <div className="relative mb-2.5 max-w-sm rounded-lg overflow-hidden border border-emerald-100 shadow-sm">
-                      <img 
-                        src={msg.image} 
-                        alt="Crop Diagnostic Leaf" 
-                        className="w-full h-auto object-cover max-h-56"
-                        referrerPolicy="no-referrer"
-                      />
+                    <div className="relative mb-2.5 max-w-sm rounded-lg overflow-hidden border border-emerald-100 shadow-sm bg-black">
+                      {msg.imageType === 'video' ? (
+                        <video 
+                          src={msg.image} 
+                          controls
+                          className="w-full h-auto max-h-56 rounded bg-black"
+                          playsInline
+                        />
+                      ) : (
+                        <img 
+                          src={msg.image} 
+                          alt="Crop Diagnostic Leaf" 
+                          className="w-full h-auto object-cover max-h-56"
+                          referrerPolicy="no-referrer"
+                        />
+                      )}
                     </div>
                   )}
 
                   {/* Bubble Content Text */}
                   <span className="block">{cleanText}</span>
+
+                  {/* Engine/Model info badge underneath text */}
+                  {msg.engine && (
+                    <div className="mt-2.5 pt-1.5 border-t border-emerald-105/40 text-[10px] font-mono text-emerald-800 flex items-center gap-1.5 font-medium">
+                      <span>🛠️ {language === 'hi' ? 'फोटो विश्लेषक तकनीक:' : language === 'pa' ? 'ਫੋਟੋ ਵਿਸ਼ਲੇਸ਼ਣ ਤਕਨਾਲੋਜੀ:' : 'Analysis Tool:'}</span>
+                      <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100 text-emerald-900 font-semibold">{msg.engine}</span>
+                    </div>
+                  )}
+
+                  {/* Search Grounding references list if found */}
+                  {msg.groundingSources && msg.groundingSources.length > 0 && (
+                    <div className="mt-3 pt-2.5 border-t border-dashed border-emerald-100 text-[11px] text-emerald-800">
+                      <span className="font-bold flex items-center gap-1 mb-1">
+                        🌐 Real-time Internet Sources (खोज संदर्भ):
+                      </span>
+                      <div className="flex flex-wrap gap-1.5 matches-sources-panel">
+                        {msg.groundingSources.map((src, idx) => (
+                          <a
+                            key={idx}
+                            href={src.uri}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-250 rounded px-2 py-0.5 text-[10px] font-semibold text-emerald-800 underline active:scale-95 transition-all inline-block truncate max-w-xs"
+                            title={src.title}
+                          >
+                            🔗 {src.title || "Ref"}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Read message audio button and print */}
                   {!isMe && cleanText && (
@@ -632,19 +667,28 @@ export default function ChatArea({
       <footer className="p-4 bg-white border-t border-emerald-100">
         <div className="max-w-3xl mx-auto space-y-3">
           
-          {/* Previews attached crop image */}
+          {/* Previews attached crop image/video */}
           {selectedImage && (
             <div className="inline-flex items-center gap-1.5 p-1 bg-white border border-emerald-100 rounded-lg relative shadow-sm">
-              <img 
-                src={selectedImage} 
-                alt="Upload Attachment Preview" 
-                className="w-14 h-14 object-cover rounded"
-                referrerPolicy="no-referrer"
-              />
+              {selectedMediaType === 'video' ? (
+                <video 
+                  src={selectedImage} 
+                  className="w-14 h-14 object-cover rounded bg-black"
+                  muted
+                  playsInline
+                />
+              ) : (
+                <img 
+                  src={selectedImage} 
+                  alt="Upload Attachment Preview" 
+                  className="w-14 h-14 object-cover rounded"
+                  referrerPolicy="no-referrer"
+                />
+              )}
               <button
                 onClick={clearImage}
                 className="p-1 hover:bg-red-50 rounded-md text-red-500 hover:text-red-600 absolute -top-1.5 -right-1.5 bg-white border border-red-100 shadow-sm cursor-pointer"
-                title="Remove image"
+                title="Remove attachment"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -656,7 +700,7 @@ export default function ChatArea({
             <button
               onClick={() => fileInputRef.current?.click()}
               className="p-2 text-gray-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all cursor-pointer"
-              title="Upload Crop Photo"
+              title="Upload Crop Photo/Video"
             >
               <Image className="w-5 h-5" />
             </button>
@@ -665,7 +709,7 @@ export default function ChatArea({
               type="file"
               ref={fileInputRef}
               onChange={handleImageSelect}
-              accept="image/*"
+              accept="image/*,video/*"
               className="hidden"
             />
 

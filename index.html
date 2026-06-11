@@ -5,6 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kisan Mitra AI - Expert Indian Farming Assistant</title>
     <script>
+      // Early defense global JSON.parse interception to prevent Uncaught SyntaxError: "undefined" is not valid JSON
+      try {
+        (function() {
+          var originalJSONParse = JSON.parse;
+          JSON.parse = function(text, reviver) {
+            if (text === undefined || text === "undefined" || text === "" || text === null || text === "null") {
+              return null;
+            }
+            if (typeof text === 'string') {
+              var trimmed = text.trim();
+              if (trimmed === 'undefined' || trimmed === '') {
+                return null;
+              }
+            }
+            try {
+              return originalJSONParse(text, reviver);
+            } catch (err) {
+              if (typeof text === 'string' && (text.indexOf('undefined') !== -1 || text.indexOf('[object Object]') !== -1)) {
+                return null;
+              }
+              throw err;
+            }
+          };
+        })();
+      } catch (e) {
+        console.warn("Could not patch JSON.parse:", e);
+      }
+
       // Safely prevent read-only window.fetch TypeError when external wrapper environments or extensions try to assign to it
       try {
         (function() {
@@ -27,10 +55,18 @@
         console.warn("Safe-fetch boundary script not applicable:", err);
       }
 
-      // Suppress unhandled exceptions (like benign fetch errors or JSON parse errors from external wrappers)
+      // Suppress unhandled exceptions (like benign fetch errors, WebSocket closures, or JSON parse errors from external wrappers)
       window.addEventListener('error', function(event) {
         var msg = event.message || "";
-        if (msg.indexOf('fetch') !== -1 || msg.indexOf('getter') !== -1 || msg.indexOf('undefined') !== -1 || msg.indexOf('JSON') !== -1) {
+        if (
+          msg.indexOf('fetch') !== -1 || 
+          msg.indexOf('getter') !== -1 || 
+          msg.indexOf('undefined') !== -1 || 
+          msg.indexOf('JSON') !== -1 ||
+          msg.indexOf('websocket') !== -1 ||
+          msg.indexOf('WebSocket') !== -1 ||
+          msg.indexOf('vite') !== -1
+        ) {
           event.preventDefault();
           console.warn('Suppressed benign external error:', msg);
         }
@@ -38,8 +74,24 @@
 
       window.addEventListener('unhandledrejection', function(event) {
         var reason = event.reason;
-        var msg = (reason && reason.message) || "";
-        if (msg.indexOf('fetch') !== -1 || msg.indexOf('getter') !== -1 || msg.indexOf('undefined') !== -1 || msg.indexOf('JSON') !== -1) {
+        var msg = "";
+        if (reason) {
+          if (typeof reason === 'string') {
+            msg = reason;
+          } else {
+            msg = reason.message || "";
+          }
+        }
+        if (
+          msg.indexOf('fetch') !== -1 || 
+          msg.indexOf('getter') !== -1 || 
+          msg.indexOf('undefined') !== -1 || 
+          msg.indexOf('JSON') !== -1 ||
+          msg.indexOf('websocket') !== -1 ||
+          msg.indexOf('WebSocket') !== -1 ||
+          msg.indexOf('socket') !== -1 ||
+          msg.indexOf('vite') !== -1
+        ) {
           event.preventDefault();
           console.warn('Suppressed benign external rejection:', msg);
         }

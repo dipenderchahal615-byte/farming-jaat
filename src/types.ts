@@ -9,9 +9,12 @@ export interface ChatMessage {
   id: string;
   sender: 'user' | 'assistant';
   text: string;
-  image?: string; // base64 representation of crop photo
+  image?: string; // base64 representation of crop photo/video
+  imageType?: 'image' | 'video'; // matches if media is image or video
+  groundingSources?: { uri: string; title: string }[]; // dynamic web references
   timestamp: string;
   isDiagnostic?: boolean; // If this message triggered a diagnostic summary
+  engine?: string; // AI model or database engine used for analysis
 }
 
 export interface ChatSession {
@@ -179,13 +182,15 @@ export const TRANSLATIONS: Record<Language, Record<string, string>> = {
     medium: "ਦਰਮਿਆਨਾ 🟡",
     low: "ਸਧਾਰਨ ਸਥਿਤੀ 🟢",
     welcomeTitle: "ਵੀਰ ਜੀ, ਅੱਜ ਕੀ ਮਸਲਾ ਹੈ? 🌾",
-    welcomeSubtitle: "ਫਸਲ, ਕੀੜੇ, ਖਾਦ, ਮੰਡੀ — ਕੁਝ ਵੀ ਪੁੱਛੋ! ਮੈਂ ਹਾਂ ਤੁਹਾਡਾ ਕਿਸਾਨ ਮਿੱਤਰ।",
+    welcomeSubtitle: "ਫਸਲ, ਕੀੜੇ, ਖาਦ, ਮੰਡੀ — ਕੁਝ ਵੀ ਪੁੱਛੋ! ਮੈਂ ਹਾਂ ਤੁਹਾਡਾ ਕਿਸਾਨ ਮਿੱਤਰ।",
     cardDiseaseTitle: "ਪੱਤਿਆਂ ਦੀ ਬੀਮਾਰੀ ਜਾਂਚ",
     cardDiseaseDesc: "ਪੱਤੇ ਦੀ ਫੋਟੋ ਖਿੱਚੋ ਜਾਂ ਅਪਲੋਡ ਕਰੋ। ਕਿਸਾਨ ਮਿੱਤਰ ਉੱਲੀ, ਪੀਲਾ ਰਸਟ, ਕੀੜੇ ਜਾਂ ਖੁਰਾਕੀ ਤੱਤਾਂ ਦੀ ਕਮੀ ਦੱਸੇਗਾ।",
     cardFertTab: "ਖਾਦ ਦੀ ਸਹੀ ਮਾਤਰਾ",
     cardFertDesc: "ਜਾਣੋ ਕਿ ਪ੍ਰਤੀ ਏਕੜ ਕਿੰਨੀ ਯੂਰੀਆ, ਡੀਏਪੀ (DAP) ਜਾਂ ਸੁਪਰ ਫਾਸਫੇਟ ਪਾਉਣ ਦੀ ਲੋੜ ਹੈ।",
     cardMandiTab: "ਮੰਡੀ ਰੇਟ ਟਰੈਕਰ",
     cardMandiDesc: "ਖੰਨਾ, ਕਰਨਾਲ, ਬਠਿੰਡਾ, ਅਤੇ ਪਟਿਆਲਾ ਦੀਆਂ ਅਨਾਜ ਮੰਡੀਆਂ ਦੇ ਅੱਜ ਦੇ ਰੇਟ ਦੇਖੋ।",
+
+
     voiceActive: "ਕਿਸਾਨ ਵੀਰ ਜੀ ਬੋਲੋ, ਅਸੀਂ ਸੁਣ ਰਹੇ ਹਾਂ...",
     notFarmingRefusal: "ਵੀਰ ਜੀ, ਮੈਂ ਕਿਸਾਨ ਦਾ ਪੁੱਤ ਹਾਂ ਤੇ ਸਿਰਫ ਖੇਤੀਬਾੜੀ ਦੇ ਸਵਾਲਾਂ ਦੇ ਜਵਾਬ ਦੇ ਸਕਦਾ ਹਾਂ। ਕਿਰਪਾ ਕਰਕੇ ਖੇਤੀ ਬਾਰੇ ਪੁੱਛੋ!",
     history: "ਪੁਰਾਣੀ ਜਾਂਚ ਇਤਿਹਾਸ",
@@ -216,7 +221,9 @@ export const MOCK_MANDI_PRICES: MandiPrice[] = [
   { id: '7', crop: { en: 'Mustard (Sarson)', hi: 'सरसों', pa: 'ਸਰੋਂ' }, market: { en: 'Sirsa Grain Yard', hi: 'सिरसा अनाज मंडी', pa: 'ਸਿਰਸਾ' }, price: 5450, change: 'up', changeAmount: 120 },
   { id: '8', crop: { en: 'Mustard (Sarson)', hi: 'सरसों', pa: 'ਸਰੋਂ' }, market: { en: 'Bathinda Market', hi: 'बठिंडा मंडी', pa: 'ਬਠਿੰਡਾ' }, price: 5420, change: 'stable', changeAmount: 0 },
   { id: '9', crop: { en: 'Potato', hi: 'आलू', pa: 'ਆਲੂ' }, market: { en: 'Jalandhar Vegetable Market', hi: 'जालंधर सब्जी मंडी', pa: 'ਜਲੰਧਰ' }, price: 1100, change: 'up', changeAmount: 30 },
-  { id: '10', crop: { en: 'Cotton (Narma)', hi: 'नरमा कपास', pa: 'ਨਰਮਾ ਕਪਾਹ' }, market: { en: 'Abohar Mandi', hi: 'अबोहर मंडी', pa: 'ਅਬੋਹਰ' }, price: 7100, change: 'down', changeAmount: 150 }
+  { id: '10', crop: { en: 'Cotton (Narma)', hi: 'नरमा कपास', pa: 'ਨਰਮਾ ਕਪਾਹ' }, market: { en: 'Abohar Mandi', hi: 'अबोहर मंडी', pa: 'ਅਬੋਹਰ' }, price: 7100, change: 'down', changeAmount: 150 },
+  { id: '11', crop: { en: 'Tomato', hi: 'टमाटर', pa: 'ਟਮਾਟਰ' }, market: { en: 'Karnal Mandi', hi: 'करनाल मंडी', pa: 'ਕਰਨਾਲ' }, price: 1800, change: 'up', changeAmount: 50 },
+  { id: '12', crop: { en: 'Peas (Matar)', hi: 'मटर', pa: 'ਮਟਰ' }, market: { en: 'Hoshiarpur Mandi', hi: 'ਹੁਸ਼ਿਆਰਪੁਰ ਮੰਡੀ', pa: 'ਹੁਸ਼ਿਆਰਪੁਰ' }, price: 2800, change: 'down', changeAmount: 100 }
 ];
 
 // Technical fertilizer dosages based on Agriculture University recommendations
@@ -226,5 +233,7 @@ export const FERTILIZER_RECOMMENDATIONS: FertilizerRecommendation[] = [
   { crop: "maize", source: "Maize (मक्का / ਮੱਕੀ)", nitrogen: 55, phosphorus: 24, potassium: 12 },
   { crop: "potato", source: "Potato (आलू / ਆਲੂ)", nitrogen: 75, phosphorus: 40, potassium: 50 },
   { crop: "cotton", source: "Cotton (नरमा कपास / ਕਪਾਹ)", nitrogen: 40, phosphorus: 20, potassium: 10 },
-  { crop: "mustard", source: "Mustard (सरसों / ਸਰੋਂ)", nitrogen: 40, phosphorus: 15, potassium: 15 }
+  { crop: "mustard", source: "Mustard (सरसों / ਸਰੋਂ)", nitrogen: 40, phosphorus: 15, potassium: 15 },
+  { crop: "tomato", source: "Tomato (टमाटर / ਟਮਾਟਰ)", nitrogen: 60, phosphorus: 40, potassium: 48 },
+  { crop: "pea", source: "Peas / Matar (मटर / ਮਟਰ)", nitrogen: 15, phosphorus: 20, potassium: 10 }
 ];
