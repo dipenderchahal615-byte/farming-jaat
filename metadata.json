@@ -1,6 +1,6 @@
 {
   "name": "Farming AI GPT",
   "description": "Expert Agriculture AI Assistant for crop disease detection, pesticide, and farming recommendations.",
-  "requestFramePermissions": ["camera"],
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

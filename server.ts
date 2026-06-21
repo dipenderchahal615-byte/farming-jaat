@@ -173,32 +173,42 @@ async function startServer() {
         try {
           // Map history to Gemini's expected role structure and merge consecutive same-role messages
           const contents: any[] = [];
-          messages.forEach((m: any) => {
+          const totalMsgs = messages.length;
+          messages.forEach((m: any, idx: number) => {
             const role = m.sender === "user" ? "user" : "model";
             const parts: any[] = [];
             
+            // Only send the base64 image data if it is in the latest user messages (idx >= totalMsgs - 2)
+            // to prevent huge token accumulation and 429 quota/payload size errors.
+            const isRecentTurn = (idx >= totalMsgs - 2);
+            
             if (m.image) {
-              if (m.image.startsWith("data:")) {
-                const commaIndex = m.image.indexOf(",");
-                if (commaIndex !== -1) {
-                  const header = m.image.substring(0, commaIndex);
-                  const dataRaw = m.image.substring(commaIndex + 1);
-                  const mimeMatch = header.match(/data:([^;]+);base64/);
-                  const mimeType = mimeMatch ? mimeMatch[1] : m.imageType === "video" ? "video/mp4" : "image/jpeg";
+              if (isRecentTurn) {
+                if (m.image.startsWith("data:")) {
+                  const commaIndex = m.image.indexOf(",");
+                  if (commaIndex !== -1) {
+                    const header = m.image.substring(0, commaIndex);
+                    const dataRaw = m.image.substring(commaIndex + 1);
+                    const mimeMatch = header.match(/data:([^;]+);base64/);
+                    const mimeType = mimeMatch ? mimeMatch[1] : m.imageType === "video" ? "video/mp4" : "image/jpeg";
+                    parts.push({
+                      inlineData: {
+                        mimeType,
+                        data: dataRaw
+                      }
+                    });
+                  }
+                } else {
                   parts.push({
                     inlineData: {
-                      mimeType,
-                      data: dataRaw
+                      mimeType: m.imageType === "video" ? "video/mp4" : "image/jpeg",
+                      data: m.image
                     }
                   });
                 }
               } else {
-                parts.push({
-                  inlineData: {
-                    mimeType: m.imageType === "video" ? "video/mp4" : "image/jpeg",
-                    data: m.image
-                  }
-                });
+                // For historical messages, we replace the heavy stream with a text placeholder to preserve context smoothly
+                parts.push({ text: `[Attached ${m.imageType === "video" ? "video" : "image"}]` });
               }
             }
             
@@ -227,19 +237,76 @@ async function startServer() {
             throw new Error("Empty conversation history");
           }
 
-          // Launch streaming content generation with dynamic Search Grounding
-          const responseStream = await ai.models.generateContentStream({
-            model: "gemini-3.5-flash",
-            contents,
-            config: {
-              systemInstruction: systemPrompt || "You are an expert Agriculture AI Assistant.",
-              temperature: 0.7,
-              tools: [{ googleSearch: {} }] // <-- Enables real-time Google Grounding search tags
+          // List of configurations to try in sequence to ensure max robustness & survive quota/429 errors
+          const configOptions = [
+            { model: "gemini-3.5-flash", useSearch: true, displayName: "Google Gemini 3.5 Flash (Search)" },
+            { model: "gemini-3.5-flash", useSearch: false, displayName: "Google Gemini 3.5 Flash" },
+            { model: "gemini-3.1-flash-lite", useSearch: false, displayName: "Google Gemini 3.1 Flash Lite" }
+          ];
+
+          let responseStream: any = null;
+          let activeConfig: any = null;
+          let encounteredQuotaLimit = false;
+          let firstChunk: any = null;
+          let streamIterator: any = null;
+
+          for (let i = 0; i < configOptions.length; i++) {
+            const opt = configOptions[i];
+            
+            // If we previously hit a quota/rate limit, skip trying Search or heavy options to save latency and avoid unnecessary errors.
+            if (encounteredQuotaLimit && opt.useSearch) {
+              console.log(`Skipping model option due to active quota limits: ${opt.model} with Search`);
+              continue;
             }
-          });
+
+            try {
+              console.log(`Trying Gemini model Option ${i + 1}/${configOptions.length}: ${opt.model} (Grounding Search: ${opt.useSearch || false})...`);
+              
+              const tools = opt.useSearch ? [{ googleSearch: {} }] : undefined;
+              
+              const stream = await ai.models.generateContentStream({
+                model: opt.model,
+                contents,
+                config: {
+                  systemInstruction: systemPrompt || "You are an expert Agriculture AI Assistant.",
+                  temperature: 0.7,
+                  tools
+                }
+              });
+
+              // Pre-fetch the first chunk to verify the stream handshake is successful (tests API key, privileges, and tools support)
+              const iterator = stream[Symbol.asyncIterator]();
+              const firstVal = await iterator.next();
+              
+              // Handshake succeeded! Store verified iterator and first chunk
+              responseStream = stream;
+              streamIterator = iterator;
+              firstChunk = firstVal;
+              activeConfig = opt;
+              console.log(`✅ Success! Stream initiated & pre-fetch handshake validated for model: ${opt.model}`);
+              break;
+            } catch (err: any) {
+              const errMsg = String(err?.message || err);
+              const isQuotaError = errMsg.includes("429") || errMsg.includes("quota") || errMsg.includes("exhausted") || errMsg.includes("rate limit");
+              
+              if (isQuotaError) {
+                encounteredQuotaLimit = true;
+                console.warn(`⚠️ Resource/Quota limit hit on ${opt.model}. Adapting configuration on the fly...`);
+              } else {
+                console.warn(`⚠️ Option ${i + 1} (${opt.model}) failed handshake:`, errMsg);
+              }
+
+              if (i === configOptions.length - 1) {
+                throw err; // All Gemini configurations failed, fall back to Groq/local
+              }
+            }
+          }
 
           let latestGroundingSources: any[] = [];
-          for await (const chunk of responseStream) {
+          
+          // Emit the pre-fetched first chunk if it is valid
+          if (firstChunk && !firstChunk.done) {
+            const chunk = firstChunk.value;
             const text = chunk.text;
             const metadata = chunk.candidates?.[0]?.groundingMetadata;
             if (metadata && metadata.groundingChunks) {
@@ -252,10 +319,36 @@ async function startServer() {
             if (text || latestGroundingSources.length > 0) {
               res.write(`data: ${JSON.stringify({ 
                 text: text || "", 
-                engine: "Google Gemini 3.5 Flash API",
+                engine: activeConfig ? activeConfig.displayName : "Google Gemini API",
                 groundingSources: latestGroundingSources.length > 0 ? latestGroundingSources : undefined 
               })}\n\n`);
               hasStartedStreaming = true;
+            }
+          }
+
+          // Continue iterating on the remaining chunks of the validated iterator
+          if (streamIterator) {
+            let nextVal = await streamIterator.next();
+            while (!nextVal.done) {
+              const chunk = nextVal.value;
+              const text = chunk.text;
+              const metadata = chunk.candidates?.[0]?.groundingMetadata;
+              if (metadata && metadata.groundingChunks) {
+                latestGroundingSources = metadata.groundingChunks.map((c: any) => ({
+                  uri: c.web?.uri || c.maps?.uri,
+                  title: c.web?.title || c.maps?.title || "Search Reference"
+                })).filter((item: any) => item.uri);
+              }
+
+              if (text || latestGroundingSources.length > 0) {
+                res.write(`data: ${JSON.stringify({ 
+                  text: text || "", 
+                  engine: activeConfig ? activeConfig.displayName : "Google Gemini API",
+                  groundingSources: latestGroundingSources.length > 0 ? latestGroundingSources : undefined 
+                })}\n\n`);
+                hasStartedStreaming = true;
+              }
+              nextVal = await streamIterator.next();
             }
           }
           
@@ -306,13 +399,24 @@ async function startServer() {
       console.error("Express Gemini / fallback chat route outer error:", error);
       // Fallback is also triggered if there's any initial parsing/initialization error
       try {
-        console.log("👉 Encountered early route exception. Attempting outer local expert backup stream...");
-        await streamStaticFallbackText(req.body.messages || [], req.body.systemPrompt || "", res);
+        if (!res.headersSent) {
+          console.log("👉 Encountered early route exception. Attempting outer local expert backup stream...");
+          await streamStaticFallbackText(req.body?.messages || [], req.body?.systemPrompt || "", res);
+        } else {
+          console.warn("⚠️ Stream failed/interrupted mid-execution. Writing graceful error chunk and ending.");
+          res.write(`data: ${JSON.stringify({ error: "Diagnostic service was temporarily interrupted: " + (error?.message || "connection reset.") })}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }
       } catch (innerErr) {
-        let rawMsg = error?.message || String(error);
-        const errMsg = JSON.stringify({ error: rawMsg });
-        res.write(`data: ${errMsg}\n\n`);
-        res.end();
+        try {
+          let rawMsg = error?.message || String(error);
+          const errMsg = JSON.stringify({ error: rawMsg });
+          res.write(`data: ${errMsg}\n\n`);
+          res.end();
+        } catch (e) {
+          // Socket already closed, suppress secondary error
+        }
       }
     }
   });

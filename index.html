@@ -5,6 +5,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kisan Mitra AI - Expert Indian Farming Assistant</title>
     <script>
+      // Force block known noisy benign logs from flooding AI Studio console logs
+      try {
+        (function() {
+          var originalConsoleError = console.error;
+          var originalConsoleWarn = console.warn;
+          
+          console.error = function() {
+            var firstArg = arguments[0];
+            if (typeof firstArg === 'string') {
+              if (
+                firstArg.indexOf('[vite]') !== -1 || 
+                firstArg.indexOf('WebSocket') !== -1 || 
+                firstArg.indexOf('websocket') !== -1 ||
+                firstArg.indexOf('closed without opened') !== -1
+              ) {
+                return; // suppress completely
+              }
+            }
+            originalConsoleError.apply(console, arguments);
+          };
+          
+          console.warn = function() {
+            var firstArg = arguments[0];
+            if (typeof firstArg === 'string') {
+              if (
+                firstArg.indexOf('Vite') !== -1 ||
+                firstArg.indexOf('[vite]') !== -1 || 
+                firstArg.indexOf('WebSocket') !== -1 || 
+                firstArg.indexOf('websocket') !== -1 ||
+                firstArg.indexOf('window.fetch') !== -1 ||
+                firstArg.indexOf('override read-only') !== -1 ||
+                firstArg.indexOf('Suppressed') !== -1
+              ) {
+                return; // suppress completely
+              }
+            }
+            originalConsoleWarn.apply(console, arguments);
+          };
+        })();
+      } catch (e) {}
+
       // Early defense global JSON.parse interception to prevent Uncaught SyntaxError: "undefined" is not valid JSON
       try {
         (function() {
@@ -29,9 +70,7 @@
             }
           };
         })();
-      } catch (e) {
-        console.warn("Could not patch JSON.parse:", e);
-      }
+      } catch (e) {}
 
       // Safely prevent read-only window.fetch TypeError when external wrapper environments or extensions try to assign to it
       try {
@@ -42,7 +81,6 @@
               return originalFetch;
             },
             set: function(val) {
-              console.warn("Kisan Mitra alert: Intercepted attempt to override read-only window.fetch. Active fetch function remains intact.", val);
               if (typeof val === 'function') {
                 originalFetch = val;
               }
@@ -51,9 +89,7 @@
             enumerable: true
           });
         })();
-      } catch (err) {
-        console.warn("Safe-fetch boundary script not applicable:", err);
-      }
+      } catch (err) {}
 
       // Suppress unhandled exceptions (like benign fetch errors, WebSocket closures, or JSON parse errors from external wrappers)
       window.addEventListener('error', function(event) {
@@ -68,7 +104,6 @@
           msg.indexOf('vite') !== -1
         ) {
           event.preventDefault();
-          console.warn('Suppressed benign external error:', msg);
         }
       });
 
@@ -93,7 +128,6 @@
           msg.indexOf('vite') !== -1
         ) {
           event.preventDefault();
-          console.warn('Suppressed benign external rejection:', msg);
         }
       });
     </script>

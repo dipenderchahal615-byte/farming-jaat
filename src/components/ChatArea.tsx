@@ -1,13 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChatMessage, Language, TRANSLATIONS } from '../types';
+import { ChatMessage, Language, TRANSLATIONS, ChatSession } from '../types';
 import { 
   Send, Sparkles, Image, Check, AlertTriangle, FileText, 
   Volume2, VolumeX, Mic, MicOff, RefreshCw, Printer, User, Sprout, ShieldAlert, HeartPulse, X, ClipboardCheck
 } from 'lucide-react';
+import CropGrowthTimeline from './CropGrowthTimeline';
 
 interface ChatAreaProps {
   language: Language;
   messages: ChatMessage[];
+  activeSession: ChatSession | null;
+  onUpdateSession: (id: string, updates: Partial<ChatSession>) => void;
   isStreaming: boolean;
   onSendMessage: (text: string, image?: string, imageType?: 'image' | 'video') => void;
   onClearChat: () => void;
@@ -60,6 +63,8 @@ interface DiagnosisReport {
 export default function ChatArea({
   language,
   messages,
+  activeSession,
+  onUpdateSession,
   isStreaming,
   onSendMessage,
   onClearChat,
@@ -71,7 +76,21 @@ export default function ChatArea({
   const [selectedMediaType, setSelectedMediaType] = useState<'image' | 'video' | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [currentlySpeakingId, setCurrentlySpeakingId] = useState<string | null>(null);
+  const [speechError, setSpeechError] = useState<string | null>(null);
   
+  const [handsFree, setHandsFree] = useState(false);
+  const [handsFreeSending, setHandsFreeSending] = useState(false);
+  const handsFreeRef = useRef(false);
+  const isListeningRef = useRef(false);
+
+  useEffect(() => {
+    handsFreeRef.current = handsFree;
+  }, [handsFree]);
+
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -84,6 +103,21 @@ export default function ChatArea({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isStreaming]);
 
+  // Auto read incoming assistant replies aloud if handsFree mode is active
+  useEffect(() => {
+    if (handsFree && messages.length > 0 && !isStreaming) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.sender === 'assistant') {
+        if (currentlySpeakingId !== lastMsg.id) {
+          const timer = setTimeout(() => {
+            speakMessage(lastMsg.id, lastMsg.text);
+          }, 400);
+          return () => clearTimeout(timer);
+        }
+      }
+    }
+  }, [messages.length, isStreaming, handsFree]);
+
   // Cleanup speech synthesis on unmount
   useEffect(() => {
     return () => {
@@ -93,45 +127,162 @@ export default function ChatArea({
     };
   }, []);
 
-  // Initialize Speech-to-Text SpeechRecognition
+  // Initialize Speech-to-Text SpeechRecognition with complete state lifecycle control
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let rec: any = null;
     if (SpeechRecognition) {
-      const rec = new SpeechRecognition();
-      rec.continuous = false;
-      rec.interimResults = false;
-      
-      // Set recognition grammar language
-      if (language === 'hi') rec.lang = 'hi-IN';
-      else if (language === 'pa') rec.lang = 'pa-IN';
-      else rec.lang = 'en-US';
+      try {
+        rec = new SpeechRecognition();
+        rec.continuous = false;
+        rec.interimResults = false;
+        
+        // Set recognition grammar language
+        if (language === 'hi') rec.lang = 'hi-IN';
+        else if (language === 'pa') rec.lang = 'pa-IN';
+        else rec.lang = 'en-US';
 
-      rec.onstart = () => setIsListening(true);
-      rec.onresult = (e: SpeechRecognitionEvent) => {
-        const transcript = e.results[0][0].transcript;
-        setInputText(prev => prev ? `${prev} ${transcript}` : transcript);
-      };
-      rec.onerror = (err: any) => console.warn("Speech recognition error:", err);
-      rec.onend = () => setIsListening(false);
+        rec.onstart = () => {
+          setIsListening(true);
+          setSpeechError(null);
+        };
+        rec.onresult = (e: SpeechRecognitionEvent) => {
+          const transcript = e.results[0][0].transcript;
+          if (handsFreeRef.current) {
+            setInputText(transcript);
+            setHandsFreeSending(true);
+            setTimeout(() => {
+              if (transcript.trim()) {
+                onSendMessage(transcript);
+                setInputText('');
+                setSelectedImage(null);
+                setSelectedMediaType(null);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+              }
+              setHandsFreeSending(false);
+            }, 1000);
+          } else {
+            setInputText(prev => prev ? `${prev} ${transcript}` : transcript);
+          }
+        };
+        rec.onerror = (err: any) => {
+          console.warn("Speech recognition error:", err);
+          const errorType = err.error || '';
+          
+          if (!errorType) {
+            // Check if running inside Google AI Studio preview iframe where browser blocks microphone
+            if (window.self !== window.top) {
+              setSpeechError(
+                language === 'hi'
+                  ? "ब्राउज़र सुरक्षा प्रतिबंध: आईफ़्रेम में आवाज़ बंद है। कृपया सुरक्षित काम करने के लिए ऊपर दाईं ओर 'Open in new tab' दबाएं और माइक की अनुमति दें।"
+                  : language === 'pa'
+                  ? "ਬਰਾਊਜ਼ਰ ਸੁਰੱਖਿਆ: ਆਈਫ੍ਰੇਮ ਵਿੱਚ ਆਵਾਜ਼ ਬੰਦ ਹੈ। ਕਿਰਪਾ ਕਰਕੇ ਐਪ ਨੂੰ ਨਵੇਂ ਟੈਬ ਵਿੱਚ ਖੋਲ੍ਹਣ ਲਈ ਉੱਪਰ ਸੱਜੇ ਪਾਸੇ 'Open in new tab' ਦਬਾਓ।"
+                  : "Iframe protection active. Browsers block speech audio logic inside embedded frames. Please click the 'Open in new tab' button in the top-right and try again."
+              );
+            } else {
+              setSpeechError(
+                language === 'hi'
+                  ? "माइक से आवाज रिकॉर्ड नहीं हो सकी। कृपया सुनिश्चित करें कि माइक कनेक्टेड है।"
+                  : language === 'pa'
+                  ? "ਆਵਾਜ਼ ਰਿਕਾਰਡ ਨਹੀਂ ਹੋ ਸਕੀ। ਕਿਰਪਾ ਕਰਕੇ ਚੈੱਕ ਕਰੋ ਕਿ ਮਾਈਕ ਚਾਲੂ ਹੈ।"
+                  : "We couldn't capture any audio. Please check your physical microphone connections."
+              );
+            }
+          } else if (errorType === 'not-allowed') {
+            setSpeechError(
+              language === 'hi'
+                ? "माइक अनुमति अवरुद्ध है। कृपया नए टैब में ऐप खोलने के लिए ऊपर दाएँ कोने में 'Open in new tab' दबाएँ और वहाँ मिक की अनुमति दें।"
+                : language === 'pa'
+                ? "ਮਾਈਕ੍ਰੋਫ਼ੋਨ ਦੀ ਇਜਾਜ਼ਤ ਬਲੌਕ ਹੈ। ਕਿਰਪਾ ਕਰਕੇ ਐਪ ਨੂੰ ਨਵੇਂ ਟੈਬ ਵਿੱਚ ਖੋਲ੍ਹਣ ਲਈ ਉੱਪਰ ਸੱਜੇ ਪਾਸੇ 'Open in new tab' ਦਬਾਓ ਅਤੇ ਮਾਈਕ ਚਾਲੂ ਕਰੋ।"
+                : "Microphone captures are disallowed. Please click the 'Open in new tab' button in the upper right workspace layout to run the app in a full tab and allow microphone access."
+            );
+          } else if (errorType === 'no-speech') {
+            setSpeechError(
+              language === 'hi' ? "कोई आवाज नहीं सुनी गई। कृपया पुनः बोलें।" : language === 'pa' ? "ਕੋਈ ਆਵਾਜ਼ ਨਹੀਂ ਸੁਣੀ ਗਈ।" : "No speech detected. Please try speaking again."
+            );
+          } else if (errorType === 'network') {
+            setSpeechError(
+              language === 'hi' ? "इंटरनेट समस्या: आवाज मान्यता के लिए सक्रिय इंटरनेट कनेक्शन वांछित है।" : language === 'pa' ? "ਇੰਟਰਨੈੱਟ ਕਨੈਕਸ਼ਨ ਸਮੱਸਿਆ।" : "Active network connection required for speech rendering."
+            );
+          } else if (errorType === 'audio-capture') {
+            setSpeechError(
+              language === 'hi' ? "कोई माइक्रोफ़ोन रिकॉर्डर नहीं मिला।" : language === 'pa' ? "ਮਾਈਕ੍ਰੋਫੋਨ ਨਹੀਂ ਮਿਲਿਆ।" : "Microphone capture hardware not found."
+            );
+          } else if (errorType !== 'aborted') {
+            setSpeechError(`Speech issues: ${errorType}`);
+          }
+          setIsListening(false);
+        };
+        rec.onend = () => setIsListening(false);
 
-      recognitionRef.current = rec;
+        recognitionRef.current = rec;
+      } catch (constructionErr) {
+        console.warn("Speech API Construct issue:", constructionErr);
+      }
     }
+
+    return () => {
+      if (rec) {
+        try {
+          rec.abort();
+        } catch (e) {}
+      }
+    };
   }, [language]);
 
+  const startListeningExplicitly = () => {
+    setSpeechError(null);
+    if (!recognitionRef.current) return;
+    if (!isListeningRef.current) {
+      try {
+        if (language === 'hi') recognitionRef.current.lang = 'hi-IN';
+        else if (language === 'pa') recognitionRef.current.lang = 'pa-IN';
+        else recognitionRef.current.lang = 'en-US';
+
+        recognitionRef.current.start();
+      } catch (err) {
+        console.warn("Failed to start recognition explicitly:", err);
+      }
+    }
+  };
+
   const toggleListening = () => {
+    setSpeechError(null);
     if (!recognitionRef.current) {
       alert("Voice input is not supported in this browser. Please use Chrome or Android web browsers.");
       return;
     }
 
     if (isListening) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.warn("Failed to stop recognition instance:", err);
+      }
     } else {
-      if (language === 'hi') recognitionRef.current.lang = 'hi-IN';
-      else if (language === 'pa') recognitionRef.current.lang = 'pa-IN';
-      else recognitionRef.current.lang = 'en-US';
+      try {
+        if (language === 'hi') recognitionRef.current.lang = 'hi-IN';
+        else if (language === 'pa') recognitionRef.current.lang = 'pa-IN';
+        else recognitionRef.current.lang = 'en-US';
 
-      recognitionRef.current.start();
+        recognitionRef.current.start();
+      } catch (err: any) {
+        console.warn("Failed to start recognition instance:", err);
+        // If already listening or in transition state, stop it first
+        if (err?.name === 'InvalidStateError' || err?.message?.includes('already started')) {
+          try {
+            recognitionRef.current.stop();
+          } catch (stopErr) {}
+        }
+        setSpeechError(
+          language === 'hi'
+            ? "सिस्टम रीसेट: कृपया एक बार फिर माइक बटन दबाएं।"
+            : language === 'pa'
+            ? "ਆਵਾਜ਼ ਸਿਸਟਮ ਤਿਆਰ ਹੋ ਰਿਹਾ ਹੈ, ਕਿਰਪਾ ਕਰਕੇ ਇੱਕ ਵਾਰ ਫਿਰ ਦਬਾਓ।"
+            : "Voice engine initializing. Please click on the microphone button once more."
+        );
+        setIsListening(false);
+      }
     }
   };
 
@@ -193,8 +344,19 @@ export default function ChatArea({
     else if (language === 'pa') utterance.lang = 'pa-IN';
     else utterance.lang = 'en-US';
 
-    utterance.onend = () => setCurrentlySpeakingId(null);
-    utterance.onerror = () => setCurrentlySpeakingId(null);
+    const handleSpeechEnded = () => {
+      setCurrentlySpeakingId(null);
+      if (handsFreeRef.current) {
+        setTimeout(() => {
+          if (handsFreeRef.current) {
+            startListeningExplicitly();
+          }
+        }, 800);
+      }
+    };
+
+    utterance.onend = handleSpeechEnded;
+    utterance.onerror = handleSpeechEnded;
 
     speakingUtteranceRef.current = utterance;
     setCurrentlySpeakingId(messageId);
@@ -351,6 +513,38 @@ export default function ChatArea({
       {/* Main Messages Workspace */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-200">
         
+        {/* Iframe detection notice to guide user on Speech to Text capabilities */}
+        {window.self !== window.top && (
+          <div className="max-w-2xl mx-auto p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl flex items-start gap-3 shadow-xs animate-fadeIn text-xs leading-relaxed">
+            <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-amber-950 text-[13px]">
+                {language === 'hi'
+                  ? "🎙️ आईफ़्रेम में आवाज़ और माइक ब्लॉक रहता है"
+                  : language === 'pa'
+                  ? "🎙️ ਆਈਫ੍ਰੇਮ ਵਿੱਚ ਮਾਈਕ੍ਰੋਫ਼ੋਨ ਬਲੌਕ ਰਹਿੰਦਾ ਹੈ"
+                  : "🎙️ Microphone is restricted within Embedded Previews"}
+              </p>
+              <p className="text-amber-800 mt-1 text-[11.5px] leading-relaxed">
+                {language === 'hi'
+                  ? "ब्राउज़र सुरक्षा प्रतिबंधों के कारण Google AI Studio के भीतर सीधे आईफ़्रेम प्लगइन में माइक ब्लॉक रहता है। माइक से बोलने और बातचीत करने के लिए कृपया ऊपर दाएँ कोने में 'Open in new tab' दबाएँ। फिर माइक चालू करें, वह 100% सही काम करेगा!"
+                  : language === 'pa'
+                  ? "ਬ੍ਰਾਊਜ਼ਰ ਦੀ ਸੁਰੱਖਿਆ ਕਾਰਨਾਂ ਕਰਕੇ ਮਾਈਕ੍ਰੋਫ਼ੋਨ ਆਈਫ੍ਰੇਮ ਵਿੱਚ ਕੰਮ ਨਹੀਂ ਕਰੇਗਾ। ਆਵਾਜ਼ ਦੀ ਵਰਤੋਂ ਕਰਨ ਲਈ ਉੱਪਰ ਸੱਜੇ ਪਾਸੇ ਦਿੱਤੇ 'Open in new tab' ਬਟਨ 'ਤੇ ਕਲਿੱਕ ਕਰੋ ਅਤੇ ਮਾਈਕ ਚਾਲੂ ਕਰੋ।"
+                  : "Due to web sandbox security policies, browser clients block microphone hardware usage inside standard embedded iframes. Please click 'Open in new tab' in the top right corner to run Kisan Mitra in full size. Speech-to-text will work 100% perfectly!"}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Crop Growth Timeline Tracker Log */}
+        {activeSession && (
+          <CropGrowthTimeline
+            language={language}
+            activeSession={activeSession}
+            onUpdateSession={onUpdateSession}
+          />
+        )}
+
         {/* Welcome Empty Dashboard */}
         {messages.length === 0 && (
           <div className="max-w-2xl mx-auto space-y-8 mt-4">
@@ -441,8 +635,13 @@ export default function ChatArea({
             >
               {/* Avatar Column */}
               {!isMe && (
-                <div className="w-8 h-8 rounded-lg bg-leaf text-white flex items-center justify-center flex-shrink-0 border border-emerald-400/30 shadow-sm">
-                  <Sprout className="w-4 h-4 text-emerald-400" />
+                <div className="w-9 h-9 rounded-full border-2 border-[#F9A825] overflow-hidden flex-shrink-0 bg-white shadow-md flex items-center justify-center">
+                  <img 
+                    src="https://cdn-icons-png.flaticon.com/512/4140/4140048.png" 
+                    alt="Kisan Mitra" 
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
                 </div>
               )}
 
@@ -597,75 +796,37 @@ export default function ChatArea({
                             {report.chemicalRemedy}
                           </p>
                         </div>
-
-                        <div className="bg-teal-50/60 border border-teal-100 rounded-xl p-4">
-                          <span className="block text-[10px] font-bold text-teal-800 uppercase tracking-wide flex items-center gap-1">
-                            <Sprout className="w-3.5 h-3.5 text-teal-700" />
-                            🍃 {t.naturalRemedy}
-                          </span>
-                          <p className="text-xs text-gray-700 leading-relaxed mt-1 font-medium">
-                            {report.organicRemedy}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Prevention and cause split */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1 text-xs text-gray-600 leading-normal">
-                        <div>
-                          <strong className="text-gray-800 block mb-0.5">⚠️ Reason / Cause:</strong>
-                          {report.reason}
-                        </div>
-                        <div>
-                          <strong className="text-emerald-700 block mb-0.5">🛡️ {t.prevention}:</strong>
-                          {report.prevention}
-                        </div>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
-
-              {/* User Avatar */}
-              {isMe && (
-                <div className="w-8 h-8 rounded-lg bg-emerald-600 border border-emerald-500/20 text-white flex items-center justify-center flex-shrink-0">
-                  <User className="w-4 h-4" />
-                </div>
-              )}
             </div>
           );
         })}
 
-        {/* Streaming Placeholder Caret */}
-        {isStreaming && (
-          <div className="flex gap-4 max-w-3xl mx-auto justify-start">
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200/60 text-emerald-600 flex items-center justify-center flex-shrink-0 animate-spin shadow-sm">
-              <RefreshCw className="w-3.5 h-3.5" />
-            </div>
-            <div className="p-4 rounded-xl bg-white border border-emerald-100 text-gray-700 text-xs sm:text-[13px] rounded-tl-none shadow-sm">
-              <span className="inline-block w-2.5 h-4 bg-emerald-600 text-transparent animate-pulse rounded-sm">|</span>
-              <span className="ml-1.5 italic text-gray-400 font-mono">{t.generatingResponse || 'Generative Agricultural reasoning...'}</span>
-            </div>
-          </div>
-        )}
-
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Mic Audio listening overlay status */}
-      {isListening && (
-        <div className="absolute inset-x-0 bottom-24 flex justify-center z-10">
-          <div className="bg-emerald-50 border border-emerald-200/80 px-4 py-2 rounded-full flex items-center gap-2 select-none shadow-md animate-pulse">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
-            <span className="text-[11px] text-emerald-800 font-sans font-bold">
-              🎤 {t.voiceActive}
-            </span>
-          </div>
-        </div>
-      )}
 
       {/* Main Bottom User Input Bar */}
       <footer className="p-4 bg-white border-t border-emerald-100">
         <div className="max-w-3xl mx-auto space-y-3">
+
+          {speechError && (
+            <div className="p-2.5 text-xs bg-red-50 border border-red-250 text-red-700 rounded-xl flex items-center justify-between gap-2 animate-fadeIn shadow-sm border-l-4 border-l-red-500">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <ShieldAlert className="w-4 h-4 text-red-500 shrink-0 animate-bounce" />
+                <span className="font-sans font-medium text-[11px] leading-relaxed text-red-800">{speechError}</span>
+              </div>
+              <button 
+                onClick={() => setSpeechError(null)} 
+                className="p-1 hover:bg-red-100 rounded-lg text-red-500 hover:text-red-700 cursor-pointer shrink-0 bg-white border border-red-200 shadow-xs"
+                title="Dismiss"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
           
           {/* Previews attached crop image/video */}
           {selectedImage && (
@@ -687,7 +848,7 @@ export default function ChatArea({
               )}
               <button
                 onClick={clearImage}
-                className="p-1 hover:bg-red-50 rounded-md text-red-500 hover:text-red-600 absolute -top-1.5 -right-1.5 bg-white border border-red-100 shadow-sm cursor-pointer"
+                className="p-1 hover:bg-red-50 rounded-md text-red-500 hover:text-red-650 absolute -top-1.5 -right-1.5 bg-white border border-red-100 shadow-sm cursor-pointer"
                 title="Remove attachment"
               >
                 <X className="w-3 h-3" />
@@ -729,12 +890,16 @@ export default function ChatArea({
               onClick={toggleListening}
               className={`p-2 transition-all rounded-xl cursor-pointer ${
                 isListening
-                  ? 'bg-red-50 text-red-500 shadow-inner border border-red-100'
+                  ? 'bg-red-50 text-red-500 shadow-inner border border-red-100 animate-pulse'
                   : 'text-gray-500 hover:text-emerald-700 hover:bg-emerald-50'
               }`}
               title="Voice Speech Input"
             >
-              {isListening ? <Mic className="w-5 h-5 animate-bounce" /> : <MicOff className="w-5 h-5" />}
+              {isListening ? (
+                <Mic className="w-5 h-5 text-red-500 animate-bounce" />
+              ) : (
+                <Mic className="w-5 h-5 text-gray-500 hover:text-emerald-700" />
+              )}
             </button>
 
             {/* Sender Button */}

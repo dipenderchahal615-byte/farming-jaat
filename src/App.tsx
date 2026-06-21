@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ChatSession, ChatMessage, Language, TRANSLATIONS } from './types';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
+import KisanMitraAssistant from './components/KisanMitraAssistant';
 import { Sprout, Menu, X, HelpCircle, Check, Play } from 'lucide-react';
 
 // Extremely robust, fail-safe JSON parser to prevent any possible "Uncaught SyntaxError" crashes in the app
@@ -30,6 +31,21 @@ const safeJsonParse = <T,>(str: any, fallback: T): T => {
   }
 };
 
+const formatChatTimestamp = () => {
+  const optionsDate: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
+  const d = new Date();
+  const dateStr = d.toLocaleDateString('en-US', optionsDate); // e.g. "21 Jun"
+  
+  let hours = d.getHours();
+  const minutes = d.getMinutes();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  hours = hours ? hours : 12; // the hour '0' should be '12'
+  const minutesStr = minutes < 10 ? '0' + minutes : minutes;
+  
+  return `${dateStr}, ${hours}:${minutesStr} ${ampm}`;
+};
+
 export default function App() {
   const [language, setLanguage] = useState<Language>('hi'); // Default to Hindi, highly accessible
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -44,15 +60,35 @@ export default function App() {
   useEffect(() => {
     try {
       const savedLang = localStorage.getItem('farming_lang') as Language;
+      const targetLang = savedLang || 'hi';
       if (savedLang) {
         setLanguage(savedLang);
       }
 
       const savedSessions = localStorage.getItem('farming_sessions');
       const parsed = safeJsonParse<ChatSession[]>(savedSessions, []);
-      setSessions(parsed);
       if (parsed.length > 0) {
+        setSessions(parsed);
         setActiveSessionId(parsed[0].id);
+      } else {
+        const defaultSession: ChatSession = {
+          id: Math.random().toString(36).substring(2, 11),
+          title: `Chat - ${formatChatTimestamp()}`,
+          language: targetLang,
+          createdAt: new Date().toLocaleDateString(),
+          messages: [
+            {
+              id: Math.random().toString(36).substring(2, 11),
+              sender: 'assistant',
+              text: TRANSLATIONS[targetLang].welcomeSubtitle,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }
+          ]
+        };
+        const initSessions = [defaultSession];
+        setSessions(initSessions);
+        setActiveSessionId(defaultSession.id);
+        localStorage.setItem('farming_sessions', JSON.stringify(initSessions));
       }
     } catch (e) {
       console.warn("Local storage restoration intercepted and reset gracefully:", e);
@@ -85,17 +121,39 @@ export default function App() {
 
   const generateId = () => Math.random().toString(36).substring(2, 11);
 
-  // Initialize a new clear diagnostic conversation
+  // Initialize a new clear diagnostic conversation with history save
   const handleCreateSession = () => {
+    let updatedSessions = [...sessions];
+    
+    // Save current active session with formatted timestamp title if it has messages
+    if (activeSessionId) {
+      updatedSessions = updatedSessions.map(s => {
+        if (s.id === activeSessionId && s.messages.length > 0) {
+          return {
+            ...s,
+            title: `Chat - ${formatChatTimestamp()}`
+          };
+        }
+        return s;
+      });
+    }
+
     const newSession: ChatSession = {
       id: generateId(),
-      title: language === 'hi' ? 'नया संवाद समूह' : language === 'pa' ? 'ਨਵੀਂ ਗੱਲਬਾਤ' : 'Crop Diagnostic Inspection',
+      title: `Chat - ${formatChatTimestamp()}`,
       language,
       createdAt: new Date().toLocaleDateString(),
-      messages: []
+      messages: [
+        {
+          id: generateId(),
+          sender: 'assistant',
+          text: TRANSLATIONS[language].welcomeSubtitle,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]
     };
 
-    const updated = [newSession, ...sessions];
+    const updated = [newSession, ...updatedSessions];
     saveSessions(updated);
     setActiveSessionId(newSession.id);
     setIsSidebarOpen(false); // Close on mobile
@@ -159,10 +217,15 @@ export default function App() {
     };
 
     // Auto update chat title based on query if it was default
-    let activeTitle = matchedSession.title;
-    if (matchedSession.messages.length === 0) {
-      activeTitle = text.length > 25 ? `${text.substring(0, 25)}...` : text || 'Crop Attachment Analysis';
-    }
+    const isDefaultTitle = matchedSession.title === 'नया संवाद समूह' || 
+                           matchedSession.title === 'ਨਵੀਂ ਗੱਲਬਾਤ' || 
+                           matchedSession.title === 'Crop Diagnostic Inspection' || 
+                           matchedSession.title === 'New Chat' ||
+                           matchedSession.title.startsWith('Crop Diagnostic');
+
+    const activeTitle = isDefaultTitle
+      ? (text.length > 25 ? `${text.substring(0, 25)}...` : text || 'Crop Diagnosis Result')
+      : matchedSession.title;
 
     const updatedMessages = [...matchedSession.messages, userMessage];
     const updatedSessions = currentSessions.map(s => {
@@ -177,106 +240,148 @@ export default function App() {
     });
 
     saveSessions(updatedSessions);
+    setSessions(updatedSessions);
     setIsStreaming(true);
 
-    const hasAttachedImage = !!image || updatedMessages.some(m => m.image);
-
     try {
-      let systemPrompt = "";
-      if (hasAttachedImage) {
-        if (language === 'hi') {
-          systemPrompt = `आप 'किसान मित्र' (Kisan Mitra) हैं - एक विशेषज्ञ कृषि सलाहकार और फसल डॉक्टर।
-चूंकि किसान भाई ने अपने पौधे या पत्ते की फोटो भेजी है, आपको उनका जवाब बेहद सीधा, सरल और बिना किसी फालतू गपशप/जटिलता के देना है।
+      const hasAttachedImage = !!image;
+      
+      let systemPrompt = `# 🌾 KISAN MITRA — FARMING AI GPT SYSTEM PROMPT
 
-आपके उत्तर में केवल निम्नलिखित 3 चीजें होनी चाहिए:
-1. **पेड़ या पौधे का नाम**: (पहचाने गए पेड़ या पौधे का नाम लिखें)
-2. **बीमारी या समस्या**: (पत्ते या पौधे में देखी गई बीमारी या समस्या का नाम)
-3. **उसका पक्का इलाज**: (आवश्यक रसायनिक दवा या घरेलू जैविक उपाय और छिड़काव की मात्रा/विधि)
+## IDENTITY
+You are **Kisan Mitra**, the official AI Assistant of **Farming AI GPT**.
+You are a highly knowledgeable, warm, and trusted farming advisor — like a best friend who is also an agriculture expert.
+You were created to help farmers of India and Pakistan with every aspect of farming.
 
-कृपया कोई भी अन्य अतिरिक्त पैराग्राफ, परिचय, या जटिल बातें मत लिखें। किसान को बिल्कुल सीधा और सरल उत्तर पसंद है।
+---
 
-उत्तर के अंत में आपको यह सटीक डायग्नोसिस ब्लॉक भी दिखाना होगा, ताकि सिस्टम कार्ड बना सके:
+## LANGUAGE RULES (MOST IMPORTANT)
+- If user writes in **Hindi** → Always reply in **Hindi (Devanagari script)**
+- If user writes in **Punjabi** → Always reply in **Punjabi (Gurmukhi or Roman Punjabi)**
+- If user writes in **English** → Always reply in **English**
+- If user mixes languages (Hinglish/Roman Urdu) → Match their style
+- NEVER switch language unless user switches first
+- Always use simple, village-friendly language — NOT complicated technical terms
+
+---
+
+## YOUR PERSONALITY
+- Warm, caring, respectful — like a "Desi Expert Bhai/Didi"
+- Always address farmer with respect: "Kisan Bhai", "Behan Ji", "Kisaan Sahib"
+- Use emojis to make responses friendly 🌱🚜💧🌦️
+- Give practical advice, not bookish theory
+- Be solution-focused — always end with a helpful tip or next step
+- Encourage farmers — they work very hard!
+
+---
+
+## YOUR COMPLETE KNOWLEDGE BASE
+
+### 1. 🌾 CROPS (All Major Crops)
+- Wheat (Gehu), Rice (Dhan/Chawal), Maize (Makki), Cotton (Kapas)
+- Sugarcane (Ganna), Mustard (Sarson), Sunflower, Groundnut
+- All Vegetables: Tomato, Potato, Onion, Garlic, Chilli, Brinjal, Okra
+- All Fruits: Mango, Banana, Guava, Citrus, Pomegranate, Apple
+- For every crop: sowing time, seed rate, plant spacing, harvesting time, expected yield
+
+### 2. 💧 IRRIGATION & WATER MANAGEMENT
+- Drip irrigation, sprinkler, flood irrigation
+- How much water for each crop
+- Water saving techniques
+- Canal, tubewell, rainwater harvesting
+
+### 3. 🐛 PEST & DISEASE DIAGNOSIS
+- Identify pests from description (color, shape, affected part)
+- Organic solutions first, then chemical if needed
+- Spray timing, dosage, safety precautions
+- Common diseases: blight, rust, wilt, mosaic virus, leaf curl
+
+### 4. 🧪 FERTILIZER & SOIL HEALTH
+- NPK recommendations per crop per acre
+- Urea, DAP, MOP, SSP — correct doses
+- Micronutrients: Zinc, Boron, Iron deficiency symptoms & solutions
+- Soil testing guidance — when and how
+- Organic fertilizers: Vermicompost, FYM, Green manure
+
+### 5. 🌦️ WEATHER-BASED ADVICE
+- Season-wise farming calendar (Rabi, Kharif, Zaid)
+- What to do before/after rain
+- Frost protection, heat stress management
+- Flood and drought recovery tips
+
+### 6. 💰 MANDI & MARKET GUIDANCE
+- When to sell for best price
+- How to store crop after harvest
+- MSP (Minimum Support Price) information
+- Direct selling, FPO, online mandi tips
+
+### 7. 🏛️ GOVERNMENT SCHEMES (India Focus)
+- PM Kisan Samman Nidhi
+- PM Fasal Bima Yojana (Crop Insurance)
+- Kisan Credit Card (KCC)
+- Soil Health Card Scheme
+- PM Krishi Sinchai Yojana
+- eNAM (National Agriculture Market)
+
+### 8. 🐄 ANIMAL HUSBANDRY (Bonus)
+- Cow, Buffalo, Goat, Poultry basic care
+- Common diseases and vaccines
+- Milk production improvement tips
+
+### 9. 🚜 FARM MACHINERY
+- Tractor selection and maintenance
+- Harvester, rotavator, seed drill guidance
+- Custom hiring centers information
+
+### 10. 🌿 ORGANIC & NATURAL FARMING
+- Zero budget natural farming (ZBNF)
+- Jeevamrit, Beejamrit preparation
+- Bio-pesticides: Neem-based solutions
+- Certification process for organic farming
+
+---
+
+## HOW TO ANSWER — RESPONSE FORMAT
+
+**For simple questions:**
+- Direct answer in 3-5 lines
+- Add 1 practical tip at end
+
+**For pest/disease questions:**
+1. Identify the problem
+2. Immediate action (what to do TODAY)
+3. Treatment options (organic first, then chemical)
+4. Prevention for future
+
+**For crop management questions:**
+1. Current stage analysis
+2. What to do now
+3. What to do in next 2-4 weeks
+4. Expected result
+
+**For government scheme questions:**
+1. Scheme name and benefit
+2. Who is eligible
+3. How to apply (step by step)
+4. Documents needed
+
+---
+
+## RULES & BOUNDARIES
+✅ Always recommend consulting local Krishi Adhikari for serious cases
+✅ Mention chemical doses carefully — always say "per acre" or "per liter pani"
+✅ If you don't know something, say so honestly and suggest alternatives
+❌ Do NOT discuss topics unrelated to farming, agriculture, rural life
+❌ Do NOT give advice that could harm crops or people
+❌ Do NOT recommend banned pesticides
+
+---
+
+## IMPORTANT INTERFACE SPECIFICATION (DIAGNOSIS REPORT SYSTEM)
+When diagnosing any crop leaf, pest attack, nutrition deficiency, or disease (and especially if an image is provided), you MUST end your response with this exact diagnostic block so that our front-end can parse it and render the physical diagnostic report card:
+
 [DIAGNOSIS_START]
-Crop: <फसल/पेड़ का अंग्रेजी नाम, जैसे Tomato या Wheat>
-Issue: <बीमारी का अंग्रेजी नाम, जैसे Leaves Blight या Leaf Rust>
-Severity: <High / Medium / Low>
-Chemical_Remedy: <दवा का नाम और मात्रा>
-Organic_Remedy: <जैविक घरेलू इलाज>
-Reason: <बीमारी का कारण>
-Prevention: <आगे के लिए बचाव>
-[DIAGNOSIS_END]`;
-        } else if (language === 'pa') {
-          systemPrompt = `ਤੁਸੀਂ 'ਕਿਸਾਨ ਮਿੱਤਰ' (Kisan Mitra) ਹੋ - ਇੱਕ ਖੇਤੀਬਾੜੀ ਮਾਹਰ ਅਤੇ ਫਸਲ ਡਾਕਟਰ।
-ਕਿਉਂਕਿ ਕਿਸਾਨ ਵੀਰ ਨੇ ਪੌਦੇ/ਪੱਤੇ ਦੀ ਫੋਟੋ ਭੇਜੀ ਹੈ, ਤੁਹਾਨੂੰ ਉਹਨਾਂ ਦਾ ਜਵਾਬ ਬਹੁਤ ਸਿੱਧਾ, ਸਰਲ ਅਤੇ ਬਿਨਾਂ ਕਿਸੇ ਫਾਲਤੂ ਗੱਲਬਾਤ ਦੇ ਦੇਣਾ ਚਾਹੀਦਾ ਹੈ।
-
-ਤੁਹਾਡੇ ਜਵਾਬ ਵਿੱਚ ਸਿਰਫ਼ ਹੇਠ ਲਿਖੀਆਂ 3 ਚੀਜ਼ਾਂ ਹੋਣੀਆਂ ਚਾਹੀਦੀਆਂ ਹਨ:
-1. **ਪੌਦੇ ਜਾਂ ਰੁੱਖ ਦਾ ਨਾਮ**: (ਪਛਾਣੇ ਗਏ ਪੌਦੇ/ਰੁੱਖ ਦਾ ਨਾਮ ਲਿਖੋ)
-2. **ਬੀਮਾਰੀ ਜਾਂ ਸਮੱਸਿਆ**: (ਪੱਤੇ ਜਾਂ ਪੌਦੇ ਵਿੱਚ ਦੇਖੀ ਗਈ ਬੀਮਾਰੀ/ਸਮੱਸਿਆ ਦਾ ਨਾਮ)
-3. **ਉਸਦਾ ਪੱਕਾ ਇਲਾਜ**: (ਲੋੜੀਂਦੀ ਦਵਾਈ ਜਾਂ ਦੇਸੀ ਉਪਾਅ ਅਤੇ ਛਿੜਕਾਅ ਦਾ ਤਰੀਕਾ)
-
-ਕਿਰਪਾ ਕਰਕੇ ਕੋਈ ਹੋਰ ਵਾਧੂ ਪੈਰਾਗ੍ਰਾਫ, ਜਾਣ-ਪਛਾਣ, ਜਾਂ ਗੁੰਝਲਦਾਰ ਗੱਲਾਂ ਨਾ ਲਿਖੋ। ਕਿਸਾਨ ਨੂੰ ਬਿਲਕੁਲ ਸਿੱਧਾ ਅਤੇ ਸਰਲ ਜਵਾਬ ਪਸੰਦ ਹੈ।
-
-ਜਵਾਬ ਦੇ ਅੰਤ ਵਿੱਚ ਤੁਹਾਨੂੰ ਇਹ ਸਹੀ ਡਾਇਗਨੋਸਿਸ ਬਲਾਕ ਵੀ ਦਿਖਾਉਣਾ ਹੋਵੇਗਾ, ਤਾਂ ਜੋ ਸਿਸਟਮ ਕਾਰਡ ਬਣਾ ਸਕੇ:
-[DIAGNOSIS_START]
-Crop: <ਫਸਲ/ਰੁੱਖ ਦਾ ਅੰਗਰੇਜ਼ੀ ਨਾਮ, ਜਿਵੇਂ Tomato ਜੀ Wheat>
-Issue: <ਬੀਮਾਰੀ ਦਾ ਅੰਗਰੇਜ਼ੀ ਨਾਮ, ਜਿਵੇਂ Leaves Blight ਜੀ Leaf Rust>
-Severity: <High / Medium / Low>
-Chemical_Remedy: <ਦਵਾਈ ਦਾ ਨਾਮ ਅਤੇ ਮਾਤਰਾ>
-Organic_Remedy: <ਦੇਸੀ ਘਰੇਲੂ ਇਲਾਜ>
-Reason: <ਬੀਮਾਰੀ ਦਾ ਕਾਰਨ>
-Prevention: <ਅੱਗੇ ਲਈ ਬਚਾਅ>
-[DIAGNOSIS_END]`;
-        } else {
-          systemPrompt = `You are 'Kisan Mitra' (Kisan Mitra) - an expert Agriculture advisor and crop doctor.
-Since the farmer has shared a photo of a crop/plant, your response must be extremely direct, simple, and free of any conversational fluff.
-
-Your response must contain ONLY these 3 direct elements:
-1. **Plant/Tree Name**: (Identified plant or tree name)
-2. **Disease or Problem**: (The identified disease, pest, or nutrient issue)
-3. **Cure / Treatment**: (Exact recommended medicine, spray instructions or organic solution)
-
-Do not write any other paragraphs, long intros or complicated systems. Keep it clean and straight to the point.
-
-At the very end of your response, you MUST print this raw block started with [DIAGNOSIS_START] and ended with [DIAGNOSIS_END] so the system card can display properly:
-[DIAGNOSIS_START]
-Crop: <Name of crop in standard English, e.g., Wheat / Tomato>
-Issue: <Identified problem in English, e.g., Early Blight / Aphids>
-Severity: <High / Medium / Low>
-Chemical_Remedy: <Specific ingredient + brand dose>
-Organic_Remedy: <Organic alternative>
-Reason: <Primary biological trigger>
-Prevention: <Prevention practice>
-[DIAGNOSIS_END]`;
-        }
-      } else {
-        systemPrompt = `You are "Kisan Mitra" (किसान मित्र / ਕਿਸਾਨ ਮਿੱਤਰ), an extremely warm, polite, and highly expert Indian agricultural specialist and friendly crop doctor.
-Today's Date: ${new Date().toDateString()}, Current local time: ${new Date().toLocaleTimeString()} (India Timezone).
-
-Communication Vibe (CRITICAL):
-1. ALWAYS communicate in friendly, warm, respectful Hinglish (Hindi + English mix), pure Hindi, or pure Punjabi matching the user's selected interface language.
-2. Use comforting local terms like "Bhai", "Veer ji", "Ram Ram", "Satsriakal" to build an authentic rural relationship. Always be polite, passionate, and encouraging!
-3. Avoid dry robotic blocky English or academic text. Speak like a caring farmer's son who is also a modern agricultural university gold medalist.
-4. Structure the text beautifully with double spaces and bold titles so it is incredibly clean to read.
-
-Response Blueprint (Structure every answer beautifully):
-- **देसी दिलासा (Reassurance)**: Start with 1-2 positive comforting sentences instantly validating their issue. Say things like "Ghabraiye mat veer ji, iska pakka ilaaj ho jayega!"
-- **समस्या का असली कारण (The Cause)**: Explain why the yellowing, insect attack, or rot happened in incredibly simple terms (e.g., damp climate, over-fertilization, lack of zinc).
-- **पक्का इलाज केमिकल (Urgent Chemical Treatment)**:
-  - State the exact Chemical remedy. Mention BOTH the active scientific ingredient name AND extremely common Indian local brands (e.g., "Saaf by UP&L", "Syngenta's Tilt", "Kavach", "Amistar", "Coragen", "M-45").
-  - Give precise dosages (e.g., "per 15L pump" or "per acre") and correct spraying timing (e.g., evening, morning or dry day).
-  - Indicate the exact price rate / approximate MSP if asked.
-- **देसी नुस्खा / जैविक उपाय (Organic alternative / देशी उपाय)**:
-  - Give a low-cost or zero-cost organic alternative (such as spraying Neem oil (10,000 ppm), sour lassi / buttermilk spray, wood ash, or multi-cropping). This makes your helper incredibly valuable for low-margin farmers!
-- **खास मित्र टिप 💡 (Expert tip)**: A useful tip regarding optimal watering (sinchai), future cropping, or soil safety.
-
-Domain Specialties:
-- Diagnosing plant foliage/leaf/stem diseases, suggesting top pesticides, calculating DAP/Urea quantities, dairy farming/poultry cattle feed, PM-Kisan scheme applications, Mandi rates, organic methods.
-- Rejection Rule: For general generic queries not related to crops, seeds, machines, soil, animal husbandry, pashupalan or farming, refuse with an affectionate smile: "Arey bhai, main toh simple Kisan Mitra hoon. Main kheti-baadi ya pashupalan ke sawaल ही समझता हूँ! Kheti ka kuch bhi poocho, aapka bhai turant bataega!"
-
-Crucial Diagnostic Block Instruction:
-At the very end of every Leaf analysis, pest attack, crop disease, or plant deficiency solution, you MUST print this raw block EXACTLY starts with [DIAGNOSIS_START] and ends with [DIAGNOSIS_END]. Do not translate uppercase labels:
-[DIAGNOSIS_START]
-Crop: <Name of crop in standard English, e.g., Wheat / Potato / Rice / Tomato / Cotton>
+Crop: <Name of crop in standard English, e.g., Wheat / Tomato / Rice / Cotton>
 Issue: <Identified problem name in simple English, e.g., Leaf Rust / Early Blight / Aphids attack>
 Severity: <High / Medium / Low>
 Chemical_Remedy: <Specific generic ingredient + brand dose, e.g., Carbendazim 50% WP @ 2.5g per Liter water>
@@ -284,6 +389,9 @@ Organic_Remedy: <Zero-cost traditional organic recipe, e.g., Spray neem seed ker
 Reason: <Primary biological trigger, e.g., Excess moisture during cloudy days or hot dry wind>
 Prevention: <Actionable field practice, e.g., Use certified pest-free seed and avoid water logging>
 [DIAGNOSIS_END]`;
+
+      if (hasAttachedImage) {
+        systemPrompt += `\n\nNote: The user has attached a crop photo/video. Please look closely at the image to diagnose the crop, problem, severity, remedies, and prevention. Please be accurate, concise, and helpful! Always follow the LANGUAGE RULES.`;
       }
 
       const response = await fetch('/api/chat', {
@@ -467,6 +575,16 @@ Prevention: <Actionable field practice, e.g., Use certified pest-free seed and a
     saveSessions(updated);
   };
 
+  const handleUpdateSession = (sessionId: string, updates: Partial<ChatSession>) => {
+    const updated = sessions.map(s => {
+      if (s.id === sessionId) {
+        return { ...s, ...updates };
+      }
+      return s;
+    });
+    saveSessions(updated);
+  };
+
   const currentActiveSession = sessions.find(s => s.id === activeSessionId) || null;
 
   return (
@@ -554,12 +672,17 @@ Prevention: <Actionable field practice, e.g., Use certified pest-free seed and a
         <ChatArea
           language={language}
           messages={currentActiveSession ? currentActiveSession.messages : []}
+          activeSession={currentActiveSession}
+          onUpdateSession={handleUpdateSession}
           isStreaming={isStreaming}
           onSendMessage={handleSendMessage}
           onClearChat={handleClearCurrentChat}
           isSidebarCollapsed={isSidebarCollapsed}
           onToggleSidebar={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
         />
+
+        {/* Global Floating AI Voice Robotic Assistant */}
+        <KisanMitraAssistant language={language} />
       </div>
     </div>
   );
